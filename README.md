@@ -11,7 +11,7 @@ generator, travel chatbot, checklist game, or replacement for a maps app.
 > You chose the places. We make the most important ones fit.
 
 The consumer product is **DayWeave**. Its underlying planning system is
-**AURORA — Adaptive User-led Route Optimization & Recommendation Assistant**.
+**AURORA: Adaptive User-led Route Optimization & Recommendation Assistant**.
 AURORA interprets wishes, verifies feasible routes, and explains trade-offs;
 the traveller always confirms priorities and chooses recovery options.
 
