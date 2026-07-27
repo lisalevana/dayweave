@@ -11,7 +11,7 @@ import type {
   TravelOption,
 } from "./types";
 
-const MAX_PLACES = 10;
+const MAX_PLACES = 12;
 
 const PRIORITY_VALUE = {
   must: 1_000,
@@ -191,6 +191,7 @@ export function optimizeDay(input: OptimizationInput): OptimizationResult {
           walkingKm: option.walkingKm,
           distanceKm: option.distanceKm,
           fareHkd: option.fareHkd ?? 0,
+          source: option.source,
         };
         const stop: PlannedStop = {
           placeId: place.id,
@@ -356,6 +357,7 @@ function closeRoute(
       walkingKm: option.walkingKm,
       distanceKm: option.distanceKm,
       fareHkd: option.fareHkd ?? 0,
+      source: option.source,
     };
     const travelMinutes = state.travelMinutes + option.minutes;
     const fareHkd = state.fareHkd + (option.fareHkd ?? 0);
@@ -466,12 +468,18 @@ function buildResult(
   const deferred = places
     .filter((place) => !selectedIds.has(place.id))
     .map((place): DeferredPlace => {
+      const hasVerifiedConstraint =
+        Boolean(place.fixedBooking) ||
+        Boolean(place.timingConstraints?.length) ||
+        place.openingWindows.length > 0;
       if (place.priority === "must") {
         return {
           placeId: place.id,
           name: place.name,
           reasonCode: "MUST_VISIT_INFEASIBLE",
-          message: `${place.name} is waiting for another day because its confirmed constraints do not fit this route.`,
+          message: hasVerifiedConstraint
+            ? `${place.name} is waiting for another day because its confirmed constraints do not fit this route.`
+            : `${place.name} is waiting for another day because the remaining planning window is full.`,
         };
       }
       if (requiredIds.has(place.id)) {
@@ -479,16 +487,20 @@ function buildResult(
           placeId: place.id,
           name: place.name,
           reasonCode: "REQUIRED_PLACE_INFEASIBLE",
-          message: `${place.name} cannot fit without breaking a confirmed constraint.`,
+          message: hasVerifiedConstraint
+            ? `${place.name} cannot fit without breaking a confirmed constraint.`
+            : `${place.name} cannot fit inside the remaining planning window.`,
         };
       }
 
-      const overlapsDay = place.openingWindows.some(
-        (window) =>
-          window.end - window.start >= place.durationMinutes &&
-          window.end >= input.day.startMinute &&
-          window.start <= input.day.endMinute,
-      );
+      const overlapsDay =
+        place.openingWindows.length === 0 ||
+        place.openingWindows.some(
+          (window) =>
+            window.end - window.start >= place.durationMinutes &&
+            window.end >= input.day.startMinute &&
+            window.start <= input.day.endMinute,
+        );
       return overlapsDay
         ? {
             placeId: place.id,
@@ -602,7 +614,7 @@ function infeasibleResult(
         place.priority === "must"
           ? "MUST_VISIT_INFEASIBLE"
           : "REQUIRED_PLACE_INFEASIBLE",
-      message: `${place.name} has not been placed because the confirmed set is infeasible.`,
+      message: `${place.name} has not been placed because the current set cannot fit inside this planning window.`,
     }),
   );
   const metrics: PlanMetrics = {
@@ -643,7 +655,10 @@ function makeFingerprint(
     .map((stop) => `${stop.placeId}@${stop.startMinute}-${stop.endMinute}`)
     .join(",");
   const legPart = legs
-    .map((leg) => `${leg.fromId}>${leg.toId}:${leg.mode}:${leg.minutes}`)
+    .map(
+      (leg) =>
+        `${leg.fromId}>${leg.toId}:${leg.mode}:${leg.minutes}:${leg.source}`,
+    )
     .join(",");
   const deferredPart = deferred.map((place) => place.placeId).sort().join(",");
   return `dw1|${status}|${stopPart}|${legPart}|${deferredPart}`;

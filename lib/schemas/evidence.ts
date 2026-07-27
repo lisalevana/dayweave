@@ -266,13 +266,28 @@ export const RecommendedStopBriefSchema = z
     placeId: z.string().min(1),
     placeName: z.string().min(1),
     mapsArea: z.string().trim().min(1).max(120).optional(),
+    latitude: z.number().min(-90).max(90).optional(),
+    longitude: z.number().min(-180).max(180).optional(),
     origin: z.enum(["saved", "service_added"]),
     whyPeopleCome: z.string().min(1),
     dontMiss: z.string().min(1),
     worthKnowing: z.string().min(1),
     evidence: z.array(ServiceEvidenceSchema).min(1),
   })
-  .strict();
+  .strict()
+  .superRefine((brief, context) => {
+    if (
+      (brief.latitude === undefined) !==
+      (brief.longitude === undefined)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "A route location must include both latitude and longitude.",
+        path:
+          brief.latitude === undefined ? ["latitude"] : ["longitude"],
+      });
+    }
+  });
 
 export const BranchResolutionSchema = z
   .object({

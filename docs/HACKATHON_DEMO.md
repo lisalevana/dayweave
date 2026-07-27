@@ -36,7 +36,7 @@ Peak.
 schedule. Now I can continue into a full day where lunch and sunset are
 protected.”
 
-**Choose:** **Continue to the full adaptive day**.
+**Choose:** **Open the complete Hong Kong demo**.
 
 ### 0:50 to 1:15 | One actionable, truthful route
 
@@ -93,16 +93,20 @@ trip, not the size of the checklist.”
 4. Point out **Why it earns the stop**, **Don't miss here**, and the dated
    source on every row.
 5. Explain that saved places and DayWeave picks are labelled separately.
-6. Choose **Use this recommendation in Maps** only if opening a new tab is
-   useful for the demo.
+6. Choose **Start this journey live**. Show the planning-estimate notice,
+   **Start this leg**, **I’ve arrived**, **Done with this stop**, a break, and
+   the sourced **Worth knowing** detail.
+7. Explain that Maps checks the real first leg and every current move. DayWeave
+   does not claim live traffic, venue hours, or a location feed.
 
 Hong Kong, Singapore, Seoul, Cheung Chau, and Johor Bahru work from curated
 destination knowledge with no model key. Other destinations use attributed
 Wikivoyage listings when the guide exposes enough specific recommendations.
 The worldwide picker helps locate a destination, but a broad country may still
 need a city, island, or smaller region. The explicit Hong Kong example keeps
-the full adaptive-route demonstration. The screenshot control appears only
-when vision is connected.
+the richest fixed-booking and timing-window demonstration, while every
+returned destination day now uses the same interactive companion and memory
+flow. The screenshot control appears only when vision is connected.
 
 ## Claims to avoid
 

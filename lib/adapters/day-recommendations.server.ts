@@ -1424,6 +1424,12 @@ async function buildBundle(
         placeId: stop.id,
         placeName: stop.name,
         ...(stop.mapsArea ? { mapsArea: stop.mapsArea } : {}),
+        ...(stop.latitude === undefined
+          ? {}
+          : { latitude: stop.latitude }),
+        ...(stop.longitude === undefined
+          ? {}
+          : { longitude: stop.longitude }),
         origin,
         whyPeopleCome: stop.whyPeopleCome,
         dontMiss: stop.dontMiss,
@@ -2204,6 +2210,12 @@ export class WikivoyageRecommendationAdapter
           ...(candidate.stop.mapsArea
             ? { mapsArea: candidate.stop.mapsArea }
             : {}),
+          ...(candidate.stop.latitude === undefined
+            ? {}
+            : { latitude: candidate.stop.latitude }),
+          ...(candidate.stop.longitude === undefined
+            ? {}
+            : { longitude: candidate.stop.longitude }),
           origin: candidate.saved ? "saved" : "service_added",
           whyPeopleCome: candidate.stop.whyPeopleCome,
           dontMiss: candidate.stop.dontMiss,

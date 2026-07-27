@@ -5,8 +5,10 @@
 DayWeave recommends the day worth taking and makes the point of every stop
 clear. Name a destination, optionally share places already saved, and the
 service returns one sourced thread with **Why people come**, **Don't miss**,
-and **Worth knowing** guidance. The Hong Kong example adds bundled route data
-and adaptive live-day replanning. DayWeave is not a notes organizer, generic
+and **Worth knowing** guidance. Every recommended day can continue into the
+same interactive journey with progress, breaks, delays, skips, extra time,
+recovery choices, and a memory thread. The Hong Kong example adds richer
+verified timing constraints. DayWeave is not a notes organizer, generic
 checklist generator, or replacement for a maps app.
 
 > Your time is precious, but it should never feel rushed. DayWeave protects the
@@ -34,9 +36,11 @@ into the service and work without a model provider. The destination combobox
 searches countries worldwide and also accepts any city, island, or region.
 Other destinations use the no-key Wikivoyage knowledge adapter when enough
 specific sourced listings are available. Broad country guides may need a more
-specific city or region. **Try the Hong Kong demo** opens sourced local insight
-first, then continues directly into the full adaptive journey without remote AI
-or routing services. A key adds screenshot reading and support for messier Hong
+specific city or region. Every returned day has a **Start this day live**
+action. It uses source-aware planning estimates and sends each real movement to
+Maps for current directions. **Try the Hong Kong demo** also offers a fuller
+scripted route with bookings and timing constraints, without remote AI or
+routing services. A key adds screenshot reading and support for messier Hong
 Kong phrasing. The screenshot action stays hidden unless that capability is
 actually available.
 
@@ -61,8 +65,9 @@ For the full scripted version, see [docs/HACKATHON_DEMO.md](docs/HACKATHON_DEMO.
 
 1. Choose **Try the Hong Kong demo**. DayWeave first reveals the three essential
    stops, why they matter, and what not to miss.
-2. Choose **Continue to the full adaptive day**. The deterministic planner opens
-   the truthful 7-of-9 route with lunch and sunset protected.
+2. Choose **Start this journey live** to follow those sourced essentials, or
+   **Open the complete Hong Kong demo** for the truthful 7-of-9 route with lunch
+   and sunset protected.
 3. Read the route. Each row includes its departure cue,
    directions from the prior stop, and a place-specific **Don’t miss here** cue.
 4. Choose **Try the live journey**. **Start this leg**, **I’ve arrived**, and **Done
@@ -79,9 +84,11 @@ For another destination, choose a country or type a city, island, or region.
 Pasting saved places is optional. When at least three trustworthy local
 listings are available, DayWeave brings back three service-owned
 recommendations, labels which places came from the traveller, shows an
-independently sourced **Don't miss** detail for every stop, and then hands the
-suggested sequence to Maps for current directions. Traveller notes never
-become recommendation evidence.
+independently sourced **Don't miss** detail for every stop, and creates one
+interactive companion per area-based day. The planner uses verified
+coordinates when the source supplies them and an explicitly labelled
+route-order buffer otherwise. Maps remains responsible for current directions
+and travel times. Traveller notes never become recommendation evidence.
 
 ## Product preview
 
@@ -101,7 +108,11 @@ DayWeave keeps interpretation, verification, and consent separate:
 destination ──► curated knowledge ──┐
                                     ├──► sourced day recommendation
 saved places, optional ─────────────┘          │
-                                               └──► Maps handoff
+                                               ▼
+                                  per-day journey materializer
+                                               │
+                                               ├──► deterministic live companion
+                                               └──► Maps for each current move
 
 Hong Kong notes ──► local catalog reader ──┐
 screenshot / messier phrasing ──► optional AI reader
@@ -119,7 +130,9 @@ verified routing/place/evidence adapters ─────────────
   renders the accessible charm/thread visualization, and `app/wivi.tsx` renders
   Wivi, DayWeave’s pixel travel-thread spirit.
 - `lib/dayweave/` contains domain types, deterministic optimization, and
-  live-day replanning. `lib/dayweave/demo.ts` owns the nine-place Hong Kong
+  live-day replanning. `lib/dayweave/materialize-recommendation.ts` turns every
+  sourced area thread into a complete, source-labelled planning matrix without
+  inventing hours or bookings. `lib/dayweave/demo.ts` owns the nine-place Hong Kong
   input, locally generated walk/transit matrix, tangled order, 40-minute delay,
   experience brief, and discovery fixture.
 - `lib/adapters/` holds the local/AI extraction and curated-evidence boundaries;
@@ -136,7 +149,7 @@ The adapter seams are intentional:
 | --- | --- | --- |
 | Intent extraction | Turn text/screenshots into structured, confirmable intent | Matches supported pasted text locally; the scripted demo remains distinct |
 | Place resolution | Resolve aliases to stable place records | Uses the Hong Kong fixture IDs |
-| Routing | Supply verified walk/transit options and distances | Uses a bundled travel-time matrix |
+| Routing | Supply current walk/transit options and distances | Uses verified coordinates when present, otherwise visible route-order planning buffers; Maps checks every live move |
 | Experience evidence | Return permitted, dated claims with provenance | Uses curated destination claims and attributed Wikivoyage listings |
 | Day recommendation | Choose a clear, sourced thread and show what not to miss | Uses bundled Hong Kong, Singapore, Seoul, Cheung Chau, and Johor Bahru knowledge |
 | Optimization | Produce a feasible plan and structured reason codes | Runs the same local deterministic engine |
@@ -149,7 +162,7 @@ handles optional live server-side requests; `SeededHongKongExtractionAdapter`
 supplies the explicit scripted fixture. `CuratedHongKongEvidenceAdapter`
 supplies the offline Mak’s Noodle and Bakehouse evidence briefs.
 
-For up to 10 places, `optimizeDay` in `lib/dayweave/optimizer.ts` runs an exact,
+For up to 12 places, `optimizeDay` in `lib/dayweave/optimizer.ts` runs an exact,
 deterministic prize-collecting subset/permutation search with Pareto and branch
 pruning. It respects opening windows, exact reservations, duration, start/end
 locations, walking comfort, pace, timing constraints, and “shopping last.”
@@ -254,8 +267,9 @@ npm run test:e2e
 npm run build
 ```
 
-`test:unit` runs the Vitest solver and transformation invariants; the targeted
-form runs the 18 core optimizer/replan/evidence tests. `npm test`
+`test:unit` runs the Vitest solver, recommendation materialization, and
+transformation invariants; the targeted form runs only the core
+optimizer/replan/evidence tests. `npm test`
 runs those checks, builds the production vinext bundle, and verifies the
 server-rendered HTML. `test:e2e` runs the separate Playwright core journey; on a
 new machine, install its browser runtime first with `npx playwright install`.
@@ -264,10 +278,12 @@ new machine, install its browser runtime first with `npx playwright install`.
 
 This prototype provides complete curated recommendations for Hong Kong,
 Singapore, Seoul, Cheung Chau, and Johor Bahru, with a no-key Wikivoyage fallback for
-destinations whose guide exposes enough specific sourced listings. The full
-deterministic optimizer currently uses bundled Hong Kong walking and
-public-transport data. The worldwide country picker is a discovery aid, not a
-claim of complete coverage for every country. Worldwide venue-hour
-verification, live traffic guarantees, and background navigation remain out of
-scope. A service recommendation is always labelled, sourced, and accepted only
-when the traveller opens the suggested route.
+destinations whose guide exposes enough specific sourced listings. Every
+returned area-based day can enter the deterministic live companion. Travel
+numbers outside the seeded Hong Kong example are clearly labelled geographic
+estimates or route-order planning buffers, never live routing. The worldwide
+country picker is a discovery aid, not a claim of complete coverage for every
+country. Worldwide venue-hour verification, live traffic guarantees, and
+background navigation remain out of scope. A service recommendation stays
+labelled and sourced, while the traveller remains responsible for starting and
+changing the day.

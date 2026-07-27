@@ -21,6 +21,10 @@ import {
 import { resolveSupportedHongKongPlaceId } from "@/lib/adapters/local-hong-kong-extraction";
 import { hongKongDemo } from "@/lib/dayweave/demo";
 import { materializeWishlistEnvelope } from "@/lib/dayweave/materialize-extraction";
+import {
+  materializeRecommendationDay,
+  type RecommendationJourneyContext,
+} from "@/lib/dayweave/materialize-recommendation";
 import { getTravelOptions, optimizeDay } from "@/lib/dayweave/optimizer";
 import {
   applyLiveEvent,
@@ -77,7 +81,7 @@ interface ExtractionCapabilities {
 }
 
 interface JourneySnapshot {
-  version: 1;
+  version: 1 | 2;
   savedAt: string;
   stage: "result" | "live";
   demoMode: boolean;
@@ -95,6 +99,8 @@ interface JourneySnapshot {
   breakMinutes: number | null;
   destination?: string;
   planningMode?: PlanningMode;
+  activeJourneyInput?: OptimizationInput;
+  journeyContext?: RecommendationJourneyContext | null;
 }
 
 const JOURNEY_STORAGE_KEY = "dayweave:journey:v1";
@@ -211,14 +217,16 @@ function sleep(milliseconds: number) {
 function directionsUrl(
   placeName: string,
   area?: string,
-  originName = "Your starting point",
+  originName?: string,
   region = "",
 ) {
   const params = new URLSearchParams({
     api: "1",
-    origin: [originName, region].filter(Boolean).join(", "),
     destination: [placeName, area, region].filter(Boolean).join(", "),
   });
+  if (originName) {
+    params.set("origin", [originName, region].filter(Boolean).join(", "));
+  }
   return `https://www.google.com/maps/dir/?${params.toString()}`;
 }
 
@@ -255,6 +263,28 @@ function recommendationDirectionsUrl(places: readonly Place[], destination: stri
   });
   if (queries.length > 2) params.set("waypoints", queries.slice(1, -1).join("|"));
   return `https://www.google.com/maps/dir/?${params.toString()}`;
+}
+
+function placesFromRecommendationBundle(
+  bundle: DayRecommendationBundle,
+): Place[] {
+  const hasSavedPlace = bundle.savedPlaceIds.length > 0;
+  return bundle.orderedBriefs.map((brief, index) => ({
+    id: brief.placeId,
+    name: brief.placeName,
+    area: brief.mapsArea ?? bundle.destination,
+    priority:
+      brief.origin === "saved" || (!hasSavedPlace && index === 0)
+        ? ("must" as const)
+        : ("love" as const),
+    durationMinutes: 60,
+    openingWindows: [],
+    source:
+      brief.origin === "saved"
+        ? ("user" as const)
+        : ("approved_discovery" as const),
+    icon: index === 0 ? "temple" : index === 1 ? "sunset" : "curio",
+  }));
 }
 
 function baselineRoute(input: OptimizationInput, order: readonly string[]) {
@@ -324,11 +354,17 @@ export default function DayWeaveApp() {
   const [unconfirmedPriorityIds, setUnconfirmedPriorityIds] = useState<string[]>([]);
   const [recommendationBundle, setRecommendationBundle] =
     useState<DayRecommendationBundle | null>(null);
+  const [recommendationJourneyError, setRecommendationJourneyError] =
+    useState("");
   const [extractionCapabilities, setExtractionCapabilities] =
     useState<ExtractionCapabilities | null>(null);
   const [places, setPlaces] = useState<Place[]>(() =>
     hongKongDemo.input.places.map((place) => ({ ...place })),
   );
+  const [activeJourneyInput, setActiveJourneyInput] =
+    useState<OptimizationInput>(hongKongDemo.input);
+  const [journeyContext, setJourneyContext] =
+    useState<RecommendationJourneyContext | null>(null);
   const [pace, setPace] = useState<Pace>("balanced");
   const [walkingKm, setWalkingKm] = useState(3.6);
   const [isUntangling, setIsUntangling] = useState(false);
@@ -367,15 +403,15 @@ export default function DayWeaveApp() {
 
   const optimizationInput = useMemo<OptimizationInput>(
     () => ({
-      ...hongKongDemo.input,
+      ...activeJourneyInput,
       places,
       day: {
-        ...hongKongDemo.input.day,
+        ...activeJourneyInput.day,
         pace,
         maxWalkingKm: walkingKm,
       },
     }),
-    [pace, places, walkingKm],
+    [activeJourneyInput, pace, places, walkingKm],
   );
 
   const tangledPlaces = useMemo(() => {
@@ -412,6 +448,14 @@ export default function DayWeaveApp() {
   const routeStops = liveState
     ? [...liveState.completedStops, ...liveState.currentPlan.itinerary]
     : plannedStops;
+  const isRecommendationJourney = journeyContext !== null;
+  const insightsByPlaceId = useMemo(
+    () => ({
+      ...dontMissByPlaceId,
+      ...(journeyContext?.insightsByPlaceId ?? {}),
+    }),
+    [journeyContext],
+  );
 
   useEffect(() => {
     if (stage === "opening") return;
@@ -444,7 +488,11 @@ export default function DayWeaveApp() {
         const rawSnapshot = window.localStorage.getItem(JOURNEY_STORAGE_KEY);
         if (!rawSnapshot) return;
         const snapshot = JSON.parse(rawSnapshot) as JourneySnapshot;
-        if (snapshot.version === 1 && snapshot.plan && Array.isArray(snapshot.places)) {
+        if (
+          (snapshot.version === 1 || snapshot.version === 2) &&
+          snapshot.plan &&
+          Array.isArray(snapshot.places)
+        ) {
           setSavedJourney(snapshot);
         }
       } catch {
@@ -457,7 +505,7 @@ export default function DayWeaveApp() {
   useEffect(() => {
     if (!plan) return;
     const snapshot: JourneySnapshot = {
-      version: 1,
+      version: 2,
       savedAt: new Date().toISOString(),
       stage: liveState ? "live" : "result",
       demoMode,
@@ -475,6 +523,8 @@ export default function DayWeaveApp() {
       breakMinutes,
       destination,
       planningMode,
+      activeJourneyInput,
+      journeyContext,
     };
     try {
       window.localStorage.setItem(JOURNEY_STORAGE_KEY, JSON.stringify(snapshot));
@@ -483,6 +533,7 @@ export default function DayWeaveApp() {
     }
   }, [
     arrived,
+    activeJourneyInput,
     breakMinutes,
     demoMode,
     destination,
@@ -492,6 +543,7 @@ export default function DayWeaveApp() {
     places,
     plan,
     planningMode,
+    journeyContext,
     recoveryApplied,
     recoveryChoice,
     stayMinutes,
@@ -517,7 +569,7 @@ export default function DayWeaveApp() {
     const journeyToPreserve: JourneySnapshot | null =
       preserveSavedJourney && plan
         ? {
-            version: 1,
+            version: 2,
             savedAt: new Date().toISOString(),
             stage: liveState ? "live" : "result",
             demoMode,
@@ -535,6 +587,8 @@ export default function DayWeaveApp() {
             breakMinutes,
             destination,
             planningMode,
+            activeJourneyInput,
+            journeyContext,
           }
         : preserveSavedJourney
           ? savedJourney
@@ -553,7 +607,10 @@ export default function DayWeaveApp() {
     setUnresolvedItems([]);
     setUnconfirmedPriorityIds([]);
     setRecommendationBundle(null);
+    setRecommendationJourneyError("");
     setPlaces(hongKongDemo.input.places.map((place) => ({ ...place })));
+    setActiveJourneyInput(hongKongDemo.input);
+    setJourneyContext(null);
     setPace("balanced");
     setWalkingKm(3.6);
     setIsUntangling(false);
@@ -613,8 +670,15 @@ export default function DayWeaveApp() {
   function continueSavedJourney() {
     if (!savedJourney) return;
     setRecommendationBundle(null);
+    setRecommendationJourneyError("");
     setDemoMode(savedJourney.demoMode);
     setPlaces(savedJourney.places);
+    setActiveJourneyInput(
+      savedJourney.activeJourneyInput ??
+        savedJourney.liveState?.sourceInput ??
+        hongKongDemo.input,
+    );
+    setJourneyContext(savedJourney.journeyContext ?? null);
     setPace(savedJourney.pace);
     setWalkingKm(savedJourney.walkingKm);
     setPlan(savedJourney.plan);
@@ -637,6 +701,7 @@ export default function DayWeaveApp() {
     setDestination("Hong Kong");
     setPlanningMode("recommendation");
     setRecommendationBundle(null);
+    setRecommendationJourneyError("");
     setDemoMode(false);
     setRawWishlist(demoWishlist);
     setImageDataUrl(null);
@@ -692,20 +757,13 @@ export default function DayWeaveApp() {
     }
 
     const bundle = body.bundle;
-    const recommendedPlaces = bundle.orderedBriefs.map((brief, index) => ({
-      id: brief.placeId,
-      name: brief.placeName,
-      area: brief.mapsArea ?? bundle.destination,
-      priority: index === 0 ? "must" as const : "love" as const,
-      durationMinutes: 60,
-      openingWindows: [],
-      source: brief.origin === "saved" ? "user" as const : "approved_discovery" as const,
-      icon: index === 0 ? "temple" : index === 1 ? "sunset" : "curio",
-    }));
+    const recommendedPlaces = placesFromRecommendationBundle(bundle);
 
     setDestination(bundle.destination);
     setPlanningMode("recommendation");
     setRecommendationBundle(bundle);
+    setRecommendationJourneyError("");
+    setJourneyContext(null);
     setDemoMode(options.continueIntoDemo === true);
     setPlaces(recommendedPlaces);
     setUnconfirmedPriorityIds([]);
@@ -788,6 +846,8 @@ export default function DayWeaveApp() {
     try {
       if (demoMode) {
         await sleep(reduceMotion ? 20 : 620);
+        setActiveJourneyInput(hongKongDemo.input);
+        setJourneyContext(null);
         setPlaces(hongKongDemo.input.places.map((place) => ({ ...place })));
         setConfirmationPrompts([]);
         setUnresolvedItems([]);
@@ -849,6 +909,8 @@ export default function DayWeaveApp() {
 
       setPlanningMode("adaptive");
       setRecommendationBundle(null);
+      setActiveJourneyInput(hongKongDemo.input);
+      setJourneyContext(null);
       setPlaces(materialized.places);
       setConfirmationPrompts(
         materialized.extraction?.confirmationPrompts.filter(
@@ -899,6 +961,8 @@ export default function DayWeaveApp() {
     setDestination("Hong Kong");
     setPlanningMode("adaptive");
     setRecommendationBundle(null);
+    setActiveJourneyInput(hongKongDemo.input);
+    setJourneyContext(null);
     setDemoMode(true);
     setRawWishlist(hongKongDemo.messyWishlist);
     setPlaces(hongKongDemo.input.places.map((place) => ({ ...place })));
@@ -928,6 +992,74 @@ export default function DayWeaveApp() {
       `${demoPlan.metrics.selectedCount} Hong Kong stops are woven. The live journey is ready to demonstrate.`,
     );
     setStage("result");
+  }
+
+  function startRecommendationJourney(dayNumber: number) {
+    if (!recommendationBundle) return;
+
+    try {
+      setRecommendationJourneyError("");
+      const journey = materializeRecommendationDay(
+        recommendationBundle,
+        dayNumber,
+        {
+          date: new Date().toISOString().slice(0, 10),
+        },
+      );
+      if (!journey.plan.feasible || journey.plan.itinerary.length === 0) {
+        throw new Error(
+          "This day needs a smaller area or a longer planning window before the live companion can start.",
+        );
+      }
+      const nextLiveState = createLiveState(journey.input, journey.plan);
+      const capacityWarnings =
+        journey.plan.deferred.length > 0
+          ? [
+              `${journey.plan.deferred.length} lower-priority ${journey.plan.deferred.length === 1 ? "stop is" : "stops are"} waiting for another day because the sample planning window is full.`,
+            ]
+          : [];
+      const nextContext: RecommendationJourneyContext = {
+        dayNumber: journey.dayNumber,
+        areaLabel: journey.areaLabel,
+        estimateBasis: journey.estimateBasis,
+        warnings: [...journey.warnings, ...capacityWarnings],
+        insightsByPlaceId: journey.insightsByPlaceId,
+      };
+
+      setPlanningMode("recommendation");
+      setDemoMode(false);
+      setActiveJourneyInput(journey.input);
+      setJourneyContext(nextContext);
+      setPlaces(journey.input.places);
+      setPace(journey.input.day.pace);
+      setWalkingKm(journey.input.day.maxWalkingKm);
+      setPlan(journey.plan);
+      setLiveState(nextLiveState);
+      setPendingDelayState(null);
+      setRecoveryOptions([]);
+      setLiveChanges([]);
+      setTravelActive(false);
+      setArrived(false);
+      setSupportMenuOpen(false);
+      setSupportSheet(null);
+      setRecoveryApplied(false);
+      setRecoveryChoice(null);
+      setStayMinutes(null);
+      setBreakMinutes(null);
+      setLiveNotice("");
+      setNowMinute(nextLiveState.currentMinute);
+      setAnnouncement(
+        `${journey.areaLabel} day ${journey.dayNumber} is ready as a live companion.`,
+      );
+      setStage("live");
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "This recommended day could not be opened just yet.";
+      setRecommendationJourneyError(message);
+      setAnnouncement("The live companion could not open yet.");
+    }
   }
 
   function movePriority(placeId: string, priority: Priority) {
@@ -979,7 +1111,7 @@ export default function DayWeaveApp() {
     if (!travelActive) {
       setTravelActive(true);
       setSupportMenuOpen(false);
-      setLiveNotice(`Wivi is walking with you toward ${currentStop.name}.`);
+      setLiveNotice(`Wivi is with you on the way to ${currentStop.name}.`);
       setAnnouncement(`Travel started toward ${currentStop.name}.`);
       return;
     }
@@ -1008,7 +1140,14 @@ export default function DayWeaveApp() {
     setTravelActive(false);
     setSupportMenuOpen(false);
     setLiveNotice("");
-    setAnnouncement(`${currentStop.name} completed. The remaining route is unchanged.`);
+    const remainingChanges = result.changes.filter(
+      (change) => change.type !== "preserved",
+    );
+    setAnnouncement(
+      remainingChanges.length === 0
+        ? `${currentStop.name} completed. The remaining route is unchanged.`
+        : `${currentStop.name} completed. Only the remaining plan was recalculated.`,
+    );
   }
 
   function openRepair() {
@@ -1026,7 +1165,7 @@ export default function DayWeaveApp() {
     setSupportMenuOpen(false);
     setSupportSheet(null);
     setStage("repair");
-    setAnnouncement("Two valid recovery paths are ready. No place changed silently.");
+    setAnnouncement("Two recovery paths are ready to compare. No place changed silently.");
   }
 
   function chooseRecovery(choiceId: Exclude<RecoveryChoiceId, null>) {
@@ -1046,7 +1185,9 @@ export default function DayWeaveApp() {
     setSupportMenuOpen(false);
     setLiveNotice(
       choiceId === "protect_moments"
-        ? "The day changed, but every remaining protected timing and fixed booking is still safe."
+        ? isRecommendationJourney
+          ? "The delay you entered is now reflected in the remaining plan. Maps will check each next leg."
+          : "The day changed, but every remaining protected timing and fixed booking is still safe."
         : "Every chosen stop stays. You approved tighter transition buffers.",
     );
     setAnnouncement(
@@ -1065,7 +1206,10 @@ export default function DayWeaveApp() {
       minutes,
     });
     if (!result.accepted) {
-      setLiveNotice(result.reasons[0]?.message ?? "That extra time could not be protected.");
+      setLiveNotice(
+        result.reasons[0]?.message ??
+          "That extra time could not be added to the remaining plan.",
+      );
       return;
     }
     setLiveState(result.state);
@@ -1127,6 +1271,27 @@ export default function DayWeaveApp() {
     setAnnouncement("Your memory thread is ready.");
   }
 
+  function returnToRecommendationDays() {
+    if (!recommendationBundle) return;
+    setPlaces(placesFromRecommendationBundle(recommendationBundle));
+    setActiveJourneyInput(hongKongDemo.input);
+    setJourneyContext(null);
+    setPlan(null);
+    setLiveState(null);
+    setPendingDelayState(null);
+    setRecoveryOptions([]);
+    setLiveChanges([]);
+    setTravelActive(false);
+    setArrived(false);
+    setRecoveryApplied(false);
+    setRecoveryChoice(null);
+    setStayMinutes(null);
+    setBreakMinutes(null);
+    setLiveNotice("");
+    setStage("recommendation");
+    setAnnouncement(`Choose the next ${destination} day when you are ready.`);
+  }
+
   function confirmEndDay() {
     if (!window.confirm("End this route here and keep the moments you completed?")) return;
     setSupportMenuOpen(false);
@@ -1168,6 +1333,7 @@ export default function DayWeaveApp() {
       setDemoMode(false);
       setPlanningMode("recommendation");
       setRecommendationBundle(null);
+      setRecommendationJourneyError("");
       setImportStatus("idle");
       setImportMessage("");
     }
@@ -1222,6 +1388,7 @@ export default function DayWeaveApp() {
                     setRawWishlist(event.target.value);
                     setDemoMode(false);
                     setRecommendationBundle(null);
+                    setRecommendationJourneyError("");
                     setImportStatus("idle");
                     setImportMessage("");
                     setVerificationAccepted(false);
@@ -1445,20 +1612,29 @@ export default function DayWeaveApp() {
           : null;
     const stopImagePositions = ["18% center", "50% center", "84% center"];
     const stopImageOrigins = ["left center", "center", "right center"];
-    const placesById = new Map(places.map((place) => [place.id, place]));
     const briefsById = new Map(
       recommendationBundle.orderedBriefs.map((brief) => [brief.placeId, brief]),
     );
     const dayThreads = recommendationBundle.routePlan.days.map((day) => {
-      const dayPlaces = day.stopIds
-        .map((placeId) => placesById.get(placeId))
-        .filter((place): place is Place => Boolean(place));
+      const briefs = day.stopIds.flatMap((placeId) => {
+        const brief = briefsById.get(placeId);
+        return brief ? [brief] : [];
+      });
+      const dayPlaces = briefs.map(
+        (brief): Place => ({
+          id: brief.placeId,
+          name: brief.placeName,
+          area: brief.mapsArea ?? day.areaLabel,
+          priority: brief.origin === "saved" ? "must" : "love",
+          durationMinutes: 60,
+          openingWindows: [],
+          source:
+            brief.origin === "saved" ? "user" : "approved_discovery",
+        }),
+      );
       return {
         ...day,
-        briefs: day.stopIds.flatMap((placeId) => {
-          const brief = briefsById.get(placeId);
-          return brief ? [brief] : [];
-        }),
+        briefs,
         routeUrl: recommendationDirectionsUrl(
           dayPlaces,
           day.areaLabel || destination,
@@ -1665,7 +1841,18 @@ export default function DayWeaveApp() {
                     </ol>
                     <footer>
                       <p>{day.rationale}</p>
-                      {isMultiDay && (
+                      <div className="recommendation-day-thread__actions">
+                        {isMultiDay && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              startRecommendationJourney(day.dayNumber)
+                            }
+                            data-testid={`start-recommended-day-${day.dayNumber}`}
+                          >
+                            Start this day live <span aria-hidden="true">→</span>
+                          </button>
+                        )}
                         <a
                           href={day.routeUrl}
                           target="_blank"
@@ -1673,9 +1860,9 @@ export default function DayWeaveApp() {
                           data-testid={`recommendation-day-route-${day.dayNumber}`}
                           aria-label={`Open ${day.areaLabel} day in Maps (opens in a new tab)`}
                         >
-                          Open {day.areaLabel} day in Maps ↗
+                          Check this route in Maps ↗
                         </a>
-                      )}
+                      </div>
                     </footer>
                   </article>
                 ))}
@@ -1688,53 +1875,61 @@ export default function DayWeaveApp() {
             </section>
 
             <div className="recommendation-visual-hero__actions">
-              {isHongKongDemo ? (
-                <>
-                  <button
-                    className="button button--primary"
-                    type="button"
-                    onClick={openAdaptiveHongKongDemo}
-                    data-testid="continue-hong-kong-demo"
-                  >
-                    Continue to the full adaptive day →
-                  </button>
-                  {!isMultiDay && singleDayRouteUrl && (
-                    <a
-                      className="button button--ghost"
-                      href={singleDayRouteUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Open these essentials in Maps ↗
-                    </a>
-                  )}
-                </>
+              {isMultiDay ? (
+                <button
+                  className="button button--primary"
+                  type="button"
+                  onClick={() =>
+                    document
+                      .getElementById("recommendation-route-plan-title")
+                      ?.scrollIntoView({
+                        behavior: reduceMotion ? "auto" : "smooth",
+                        block: "start",
+                      })
+                  }
+                >
+                  Choose the day to start ↓
+                </button>
               ) : (
-                <>
-                  {!isMultiDay && singleDayRouteUrl && (
-                    <a
-                      className="button button--primary"
-                      href={singleDayRouteUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Use this recommendation in Maps ↗
-                    </a>
-                  )}
-                  <button
-                    className="button button--ghost"
-                    type="button"
-                    onClick={() => setStage("opening")}
-                  >
-                    Try another destination
-                  </button>
-                </>
+                <button
+                  className="button button--primary"
+                  type="button"
+                  onClick={() => startRecommendationJourney(1)}
+                  data-testid="start-recommended-journey"
+                >
+                  Start this journey live →
+                </button>
+              )}
+              {!isMultiDay && singleDayRouteUrl && (
+                <a
+                  className="button button--ghost"
+                  href={singleDayRouteUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Check the route in Maps ↗
+                </a>
+              )}
+              {isHongKongDemo && (
+                <button
+                  className="button button--ghost"
+                  type="button"
+                  onClick={openAdaptiveHongKongDemo}
+                  data-testid="continue-hong-kong-demo"
+                >
+                  Open the complete Hong Kong demo
+                </button>
               )}
             </div>
+            {recommendationJourneyError && (
+              <p className="recommendation-journey-error" role="alert">
+                {recommendationJourneyError}
+              </p>
+            )}
             {isHongKongDemo && (
               <p className="recommendation-demo-next">
-                Next: a seven-stop day with lunch, sunset and the moments that
-                matter protected when plans change.
+                The complete demo adds a seven-stop day with a fixed lunch,
+                sunset timing and a richer recovery scenario.
               </p>
             )}
           </div>
@@ -2063,31 +2258,35 @@ export default function DayWeaveApp() {
     );
     const currentOrigin =
       liveState?.completedStops.at(-1)?.name ??
-      (destination ? `${destination} starting point` : "Starting point");
+      (demoMode ? "Sheung Wan MTR" : undefined);
+    const currentJourneyInsight = currentStop
+      ? journeyContext?.insightsByPlaceId[currentStop.placeId]
+      : undefined;
     const currentInsight = currentStop
-      ? dontMissByPlaceId[
-          currentStop.placeId as keyof typeof dontMissByPlaceId
-        ]
+      ? insightsByPlaceId[currentStop.placeId]
       : undefined;
     const currentStopNumber = completedIds.length + 1;
     const laterStopCount = Math.max(0, plannedStops.length - 1);
     const upcomingStops = plannedStops.slice(1, 3);
     const destinationKey = destination.trim().toLocaleLowerCase("en");
+    const livePlaceIds = new Set(livePlaces.map((place) => place.id));
+    const hasSingaporeArtwork = [
+      "fort-canning-park",
+      "marina-bay-waterfront",
+      "east-coast-park",
+    ].every((placeId) => livePlaceIds.has(placeId));
     const liveArtwork =
       /^(?:hong\s*kong|hongkong|hk)$/.test(destinationKey)
         ? {
             src: "/hong-kong-journey-v1.png",
             alt: "A mosaic Hong Kong journey with Man Mo Temple, Victoria Harbour and Victoria Peak",
           }
-        : destinationKey === "singapore"
+        : destinationKey === "singapore" && hasSingaporeArtwork
           ? {
               src: "/singapore-journey-v1.png",
               alt: "A mosaic Singapore journey from Fort Canning through Marina Bay to East Coast Park",
             }
-          : {
-              src: "/og-v2.png",
-              alt: `A DayWeave journey through ${destination || "the day"}`,
-            };
+          : null;
     const liveArtworkPositions: Record<string, string> = {
       "man-mo-temple": "8% center",
       "bakehouse-soho": "25% center",
@@ -2100,11 +2299,23 @@ export default function DayWeaveApp() {
     const liveArtworkPosition =
       (currentStop && liveArtworkPositions[currentStop.placeId]) ?? "center";
     const startLabel = destination
-      ? `${destination} starting point`
+      ? isRecommendationJourney
+        ? `Start of the ${journeyContext.areaLabel} day`
+        : `${destination} starting point`
       : "Starting point";
     const endLabel = destination
-      ? `${destination} finish`
+      ? isRecommendationJourney
+        ? `End of the ${journeyContext.areaLabel} day`
+        : `${destination} finish`
       : "End point";
+    const travelTimingLabel =
+      nextLeg?.source === "curated_sequence_estimate"
+        ? `${nextLeg.minutes} min planning buffer`
+        : nextLeg?.source === "geographic_estimate"
+          ? `about ${nextLeg.minutes} min planning estimate`
+          : nextLeg
+            ? `${nextLeg.minutes} min ${travelModeLabel(nextLeg.mode).toLocaleLowerCase("en")}`
+            : "";
 
     return (
       <section className="screen live-screen" aria-labelledby="live-title">
@@ -2112,28 +2323,72 @@ export default function DayWeaveApp() {
           <div className="live-main">
             <div className="live-journey-status">
               <div>
-                <p className="step-label">{demoMode ? "Guided demo" : "Live route"}</p>
+                <p className="step-label">
+                  {demoMode
+                    ? "Guided demo"
+                    : isRecommendationJourney
+                      ? "Live companion"
+                      : "Live route"}
+                </p>
                 <strong>{currentStop ? `Stop ${currentStopNumber} of ${routeStops.length}` : "Route complete"}</strong>
               </div>
               <div className="live-journey-clock">
-                <span>{demoMode ? "Demo time" : "Plan time"}</span>
+                <span>
+                  {demoMode
+                    ? "Demo time"
+                    : isRecommendationJourney
+                      ? "Sample plan time"
+                      : "Plan time"}
+                </span>
                 <strong>{formatTime(nowMinute)}</strong>
-                <small>{destination || "Hong Kong"}</small>
+                <small>{destination || "Your day"}</small>
               </div>
             </div>
+
+            {journeyContext && (
+              <details className="live-journey-estimate-note">
+                <summary>
+                  {journeyContext.estimateBasis === "geographic_estimate"
+                    ? "Planning estimates · Maps checks live travel"
+                    : "Guided sequence · Maps checks live travel"}
+                </summary>
+                <ul>
+                  {journeyContext.warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
 
             {currentStop ? (
               <article className="live-journey-focus">
                 <figure className="live-journey-focus__visual">
-                  <Image
-                    src={liveArtwork.src}
-                    alt={liveArtwork.alt}
-                    fill
-                    priority
-                    unoptimized
-                    sizes="(max-width: 980px) 100vw, 46vw"
-                    style={{ objectPosition: liveArtworkPosition }}
-                  />
+                  {liveArtwork ? (
+                    <Image
+                      src={liveArtwork.src}
+                      alt={liveArtwork.alt}
+                      fill
+                      priority
+                      unoptimized
+                      sizes="(max-width: 980px) 100vw, 46vw"
+                      style={{ objectPosition: liveArtworkPosition }}
+                    />
+                  ) : (
+                    <div
+                      className="live-journey-focus__fallback"
+                      aria-hidden="true"
+                    >
+                      <span>{journeyContext?.areaLabel ?? destination}</span>
+                      <strong>
+                        {(journeyContext?.areaLabel ?? destination ?? "Day")
+                          .slice(0, 2)
+                          .toLocaleUpperCase("en")}
+                      </strong>
+                      <i />
+                      <i />
+                      <i />
+                    </div>
+                  )}
                   <figcaption>
                     <span>Now</span>
                     <strong>{currentStop.name}</strong>
@@ -2157,18 +2412,30 @@ export default function DayWeaveApp() {
                         <dt>Stay until</dt>
                         <dd>{formatTimelineTime(currentStop.endMinute)}</dd>
                       </div>
+                    ) : nextLeg &&
+                      isRecommendationJourney &&
+                      nextLeg.fromId ===
+                        liveState?.sourceInput.day.startLocationId ? (
+                      <div>
+                        <dt>Getting there</dt>
+                        <dd>Start from your location · check Maps</dd>
+                      </div>
                     ) : nextLeg ? (
                       <>
                         <div>
-                          <dt>Leave</dt>
+                          <dt>
+                            {isRecommendationJourney ? "Suggested leave" : "Leave"}
+                          </dt>
                           <dd>{formatTimelineTime(nextLeg.departMinute)}</dd>
                         </div>
                         <div>
-                          <dt>Travel</dt>
-                          <dd>{nextLeg.minutes} min {travelModeLabel(nextLeg.mode).toLocaleLowerCase("en")}</dd>
+                          <dt>{isRecommendationJourney ? "Allow" : "Travel"}</dt>
+                          <dd>{travelTimingLabel}</dd>
                         </div>
                         <div>
-                          <dt>Arrive</dt>
+                          <dt>
+                            {isRecommendationJourney ? "Planned arrival" : "Arrive"}
+                          </dt>
                           <dd>{formatTimelineTime(nextLeg.arriveMinute)}</dd>
                         </div>
                       </>
@@ -2222,10 +2489,31 @@ export default function DayWeaveApp() {
                           See the local insight →
                         </button>
                       )}
+                      {currentJourneyInsight && (
+                        <details className="live-journey-insight__details">
+                          <summary>Worth knowing</summary>
+                          <p>{currentJourneyInsight.worthKnowing}</p>
+                          <a
+                            href={currentJourneyInsight.sourceUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {currentJourneyInsight.sourceName} ↗
+                          </a>
+                        </details>
+                      )}
                     </aside>
                   )}
 
-                  <p className="live-journey-reassurance">{recoveryApplied ? "The rest of the route has already shifted around your delay. Protected moments remain safe." : "Only this move needs your attention. The rest of the day waits quietly below."}</p>
+                  <p className="live-journey-reassurance">
+                    {isRecommendationJourney
+                      ? recoveryApplied
+                        ? "The remaining plan now reflects the delay you entered. Maps will check each next leg."
+                        : "Times are planning estimates, not live traffic. Maps checks current directions; venue sources remain responsible for hours and availability."
+                      : recoveryApplied
+                        ? "The rest of the route has already shifted around your delay. Protected moments remain safe."
+                        : "Only this move needs your attention. The rest of the day waits quietly below."}
+                  </p>
                   {liveNotice && <div className="live-journey-notice">{liveNotice}</div>}
                 </div>
               </article>
@@ -2293,7 +2581,13 @@ export default function DayWeaveApp() {
                   {recoveryApplied && (
                     <div className="change-summary">
                       <strong>{recoveryChoice === "protect_moments" ? "The moments are protected" : "Every chosen stop is kept"}</strong>
-                      <p>{recoveryChoice === "protect_moments" ? `${recoveryDeferred?.name ?? "One lower-priority stop"} is saved for another day. Your fixed booking and protected timing windows remain safe.` : `You chose tighter transition buffers. The route still finishes by ${formatTimelineTime(selectedRecovery?.state.currentPlan.metrics.finishMinute ?? livePlan.metrics.finishMinute)}.`}</p>
+                      <p>
+                        {recoveryChoice === "protect_moments"
+                          ? isRecommendationJourney
+                            ? `${recoveryDeferred ? `${recoveryDeferred.name} is saved for another day.` : "No stop was deferred."} Remaining times are planning estimates; Maps checks each move.`
+                            : `${recoveryDeferred?.name ?? "One lower-priority stop"} is saved for another day. Your fixed booking and protected timing windows remain safe.`
+                          : `You chose tighter transition buffers. The route still finishes by ${formatTimelineTime(selectedRecovery?.state.currentPlan.metrics.finishMinute ?? livePlan.metrics.finishMinute)}.`}
+                      </p>
                     </div>
                   )}
                   {breakMinutes && <div className="change-summary"><strong>Rest is protected</strong><p>Your {breakMinutes}-minute break is part of the plan, not leftover time.</p></div>}
@@ -2309,7 +2603,10 @@ export default function DayWeaveApp() {
                   <h2 id="live-route-title">What comes next.</h2>
                   <p>{completedIds.length > 0 ? `${completedIds.length} ${completedIds.length === 1 ? "moment is" : "moments are"} already tied. ` : ""}{laterStopCount} {laterStopCount === 1 ? "stop remains" : "stops remain"} after this one.</p>
                 </div>
-                <span><small>Back by</small><strong>{formatTimelineTime(livePlan.metrics.finishMinute)}</strong></span>
+                <span>
+                  <small>{isRecommendationJourney ? "Estimated finish" : "Back by"}</small>
+                  <strong>{formatTimelineTime(livePlan.metrics.finishMinute)}</strong>
+                </span>
               </header>
 
               {upcomingStops.length > 0 ? (
@@ -2351,8 +2648,10 @@ export default function DayWeaveApp() {
                     currentPlaceId={currentStop?.placeId}
                     currentStateLabel={arrived ? "You’re here" : travelActive ? "On the way" : "Up next"}
                     breaks={liveState?.protectedBreaks ?? []}
-                    label="Live route with completed, current and upcoming stops"
-                    showConstraintReasons
+                    label={isRecommendationJourney ? "Guided route with completed, current and upcoming stops" : "Live route with completed, current and upcoming stops"}
+                    insightsByPlaceId={insightsByPlaceId}
+                    showConstraintReasons={!isRecommendationJourney}
+                    showDirectionsLinks
                     variant="live"
                   />
                 </details>
@@ -2396,39 +2695,71 @@ export default function DayWeaveApp() {
         <div className="screen-inner">
           <div className="screen-heading">
             <p className="step-label">The day changed · you stay in control</p>
-            <h1 id="repair-title" tabIndex={-1} ref={headingRef}>Forty minutes later. Two honest paths.</h1>
-            <p>At {formatTime(pendingDelayState?.currentMinute ?? nowMinute)}, only the remaining day was recalculated. {completedMomentCopy}</p>
+            <h1 id="repair-title" tabIndex={-1} ref={headingRef}>
+              {isRecommendationJourney
+                ? "Your plan is forty minutes later. Two clear choices."
+                : "Forty minutes later. Two honest paths."}
+            </h1>
+            <p>
+              {isRecommendationJourney
+                ? `The sample plan now reads ${formatTime(pendingDelayState?.currentMinute ?? nowMinute)}. Only the remaining estimated schedule was recalculated.`
+                : `At ${formatTime(pendingDelayState?.currentMinute ?? nowMinute)}, only the remaining day was recalculated.`}{" "}
+              {completedMomentCopy}
+            </p>
           </div>
           <div className="repair-intro">
             <Wivi mood="comforting" small />
-            <p>The day changed, but nothing disappeared. Choose what matters now and Wivi will hold the protected pieces.</p>
+            <p>
+              {isRecommendationJourney
+                ? "Nothing changes until you choose. DayWeave will only reshape the stops still ahead."
+                : "The day changed, but nothing disappeared. Choose what matters now and Wivi will hold the protected pieces."}
+            </p>
           </div>
           <div className="repair-paths">
             <article className="repair-path repair-path--protected">
               <p className="mono-label">Calmer recovery</p>
               <h2>{protectOption?.title ?? "Protect the moments"}</h2>
-              <p>{protectOption?.description ?? "Keep the emotional anchors and create breathing room."}</p>
+              <p>
+                {isRecommendationJourney
+                  ? "Keep saved places first and finish near the original estimate; a lower-priority recommendation may wait."
+                  : protectOption?.description ??
+                    "Keep the emotional anchors and create breathing room."}
+              </p>
               <ul className="tradeoff-list">
-                <li>{protectedTimedPlace
-                  ? `Keep ${protectedTimedPlace.name} ${protectedTimedPlace.timingConstraints?.[0]?.window.label?.toLocaleLowerCase("en") ?? "inside its protected timing window"}`
-                  : "Keep every confirmed timing window valid"}</li>
-                <li>{protectedFixedPlace
-                  ? `Keep ${protectedFixedPlace?.fixedBooking?.label.toLocaleLowerCase("en") ?? "the fixed booking"} at ${formatTime(protectedFixedPlace?.fixedBooking?.start ?? protectedFixedStop?.startMinute ?? 0)}`
-                  : "Keep every confirmed booking fixed"}</li>
+                {isRecommendationJourney ? (
+                  <>
+                    <li>Keep saved places ahead of service-added stops</li>
+                    <li>Use the same visible planning estimates</li>
+                  </>
+                ) : (
+                  <>
+                    <li>{protectedTimedPlace
+                      ? `Keep ${protectedTimedPlace.name} ${protectedTimedPlace.timingConstraints?.[0]?.window.label?.toLocaleLowerCase("en") ?? "inside its protected timing window"}`
+                      : "Keep every confirmed timing window valid"}</li>
+                    <li>{protectedFixedPlace
+                      ? `Keep ${protectedFixedPlace?.fixedBooking?.label.toLocaleLowerCase("en") ?? "the fixed booking"} at ${formatTime(protectedFixedPlace?.fixedBooking?.start ?? protectedFixedStop?.startMinute ?? 0)}`
+                      : "Keep every confirmed booking fixed"}</li>
+                  </>
+                )}
                 <li>{newlyDeferred.length > 0 ? `Save ${newlyDeferred.map((stop) => stop.name).join(", ")} for another day` : "No newly deferred stops"}</li>
-                <li>Finish by {formatTime(protectOption?.state.currentPlan.metrics.finishMinute ?? 20 * 60 + 35)}</li>
+                <li>{isRecommendationJourney ? "Estimated finish" : "Finish by"} {formatTime(protectOption?.state.currentPlan.metrics.finishMinute ?? 20 * 60 + 35)}</li>
               </ul>
               <button className="button button--primary" type="button" onClick={() => chooseRecovery("protect_moments")} disabled={!protectOption?.valid} data-testid="protect-sunset">Choose Protect the moments</button>
             </article>
             <article className="repair-path repair-path--complete">
               <p className="mono-label">Fuller recovery</p>
               <h2>{keepOption?.title ?? "Keep every chosen stop"}</h2>
-              <p>{keepOption?.description ?? "Preserve the chosen route with a more packed pace."}</p>
+              <p>
+                {isRecommendationJourney && !keepOption?.valid
+                  ? "Keeping every stop does not fit inside the recovery limit."
+                  : keepOption?.description ??
+                    "Preserve the chosen route with a more packed pace."}
+              </p>
               <ul className="tradeoff-list">
                 <li>Keep every remaining chosen destination</li>
                 <li>Switch from balanced to packed pacing</li>
                 <li>Use tighter transition buffers</li>
-                <li>Finish by {formatTime(keepOption?.state.currentPlan.metrics.finishMinute ?? 20 * 60 + 27)}</li>
+                <li>{isRecommendationJourney ? "Estimated finish" : "Finish by"} {formatTime(keepOption?.state.currentPlan.metrics.finishMinute ?? 20 * 60 + 27)}</li>
               </ul>
               <button className="button button--sky" type="button" onClick={() => chooseRecovery("keep_every_stop")} disabled={!keepOption?.valid}>Choose Keep every stop</button>
             </article>
@@ -2522,13 +2853,30 @@ export default function DayWeaveApp() {
             <ThreadMap places={tangledPlaces} untangled completedIds={completedIds} label="Completed places remain tied while the remaining route settles into a new shape" />
             <div className="tangle-action">
               <Wivi mood="sitting" />
-              <div className="wivi-speech">This is what the trip is for. Let’s reshape the rest of your afternoon.</div>
+              <div className="wivi-speech">This is what the trip is for. Let’s reshape the rest of your day.</div>
               <h1 id="reweave-title" tabIndex={-1} ref={headingRef}>Enjoying a place longer is not a mistake.</h1>
-              <p>{stayMinutes} extra minutes are now honored. Completed stops remain fixed and the solver checked every remaining window again.</p>
-              <div className="change-summary"><strong>What changed</strong><p>{deferredChange?.message ?? `${movedCount} remaining ${movedCount === 1 ? "time was" : "times were"} recalculated. No destination was added, and every remaining protected timing stays valid.`}</p></div>
+              <p>
+                {stayMinutes} extra minutes are now honored.{" "}
+                {isRecommendationJourney
+                  ? "Completed stops remain fixed. DayWeave recalculated only the unvisited route using the same planning estimates."
+                  : "Completed stops remain fixed and the solver checked every remaining window again."}
+              </p>
+              <div className="change-summary">
+                <strong>What changed</strong>
+                <p>
+                  {deferredChange?.message ??
+                    (isRecommendationJourney
+                      ? `${movedCount} remaining ${movedCount === 1 ? "planning time was" : "planning times were"} recalculated. No destination was added; Maps checks each next leg.`
+                      : `${movedCount} remaining ${movedCount === 1 ? "time was" : "times were"} recalculated. No destination was added, and every remaining protected timing stays valid.`)}
+                </p>
+              </div>
               <button className="button button--coral untangle-button" type="button" onClick={() => {
                 setStage("live");
-                setLiveNotice("Rewoven. Your protected moments are still safe, and this stop got the time it deserved.");
+                setLiveNotice(
+                  isRecommendationJourney
+                    ? "Rewoven. This stop got the time it deserved, and only the remaining plan changed."
+                    : "Rewoven. Your protected moments are still safe, and this stop got the time it deserved.",
+                );
               }} data-testid="reweave-day"><span className="button-icon" aria-hidden="true">⌁</span>Reweave the rest</button>
             </div>
           </div>
@@ -2562,13 +2910,37 @@ export default function DayWeaveApp() {
           </div>
           <div className="memory-moments">
             <div className="memory-moment"><strong>{memoryStops.length} {memoryStops.length === 1 ? "moment" : "moments"} tied</strong><p>Only places you explicitly completed become memories.</p></div>
-            <div className="memory-moment"><strong>{returnedMinutes} min returned</strong><p>Less backtracking, more room to actually be there.</p></div>
-            {rememberedMaks && <div className="memory-moment"><strong>Shrimp wonton noodles</strong><p>A signature detail remembered from Mak’s, not another task to complete.</p></div>}
+            {isRecommendationJourney && journeyContext ? (
+              <div className="memory-moment"><strong>{journeyContext.areaLabel} thread</strong><p>The day stayed inside one recommended area; Maps handled each current move.</p></div>
+            ) : (
+              <div className="memory-moment"><strong>{returnedMinutes} min returned</strong><p>Less backtracking, more room to actually be there.</p></div>
+            )}
+            {!isRecommendationJourney && rememberedMaks && <div className="memory-moment"><strong>Shrimp wonton noodles</strong><p>A signature detail remembered from Mak’s, not another task to complete.</p></div>}
             <div className="memory-moment"><strong>{deferredCount} waiting for another day</strong><p>Lovely places kept with kindness, not framed as loss.</p></div>
           </div>
           <div className="wivi-speech">{dayComplete ? "You did not complete a list. You made space for a day that mattered." : "The thread remembers what happened, never what the plan merely hoped for."}</div>
           <div className="action-row">
-            <button className="button button--primary" type="button" onClick={exploreAnotherPlace}>Weave another day</button>
+            {recommendationBundle &&
+            recommendationBundle.routePlan.days.length > 1 ? (
+              <>
+                <button
+                  className="button button--primary"
+                  type="button"
+                  onClick={returnToRecommendationDays}
+                >
+                  Back to my {destination} days
+                </button>
+                <button
+                  className="button button--ghost"
+                  type="button"
+                  onClick={exploreAnotherPlace}
+                >
+                  Explore another place
+                </button>
+              </>
+            ) : (
+              <button className="button button--primary" type="button" onClick={exploreAnotherPlace}>Weave another day</button>
+            )}
             {!dayComplete && <button className="button button--sky" type="button" onClick={() => setStage("live")}>Return to my route</button>}
           </div>
         </div>

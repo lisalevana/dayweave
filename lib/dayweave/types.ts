@@ -52,7 +52,11 @@ export interface TravelOption {
   walkingKm: number;
   distanceKm: number;
   fareHkd?: number;
-  source: "seeded_demo_estimate" | "routing_adapter";
+  source:
+    | "seeded_demo_estimate"
+    | "routing_adapter"
+    | "geographic_estimate"
+    | "curated_sequence_estimate";
 }
 
 export type TravelMatrix = Record<
@@ -134,6 +138,7 @@ export interface PlannedLeg {
   walkingKm: number;
   distanceKm: number;
   fareHkd: number;
+  source: TravelOption["source"];
 }
 
 export interface PlannedStop {

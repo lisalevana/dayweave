@@ -1231,9 +1231,19 @@
   line-height: 1.55;
 }
 
-.recommendation-day-thread footer a {
-  display: inline-block;
+.recommendation-day-thread__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 18px;
+  align-items: center;
   margin-top: 16px;
+}
+
+.recommendation-day-thread__actions button,
+.recommendation-day-thread__actions a {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
   padding-bottom: 4px;
   border-bottom: 1px solid var(--coral);
   color: var(--paper);
@@ -1245,7 +1255,18 @@
   text-transform: uppercase;
 }
 
-.recommendation-day-thread footer a:hover {
+.recommendation-day-thread__actions button {
+  border-top: 0;
+  border-right: 0;
+  border-left: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.recommendation-day-thread__actions button:hover,
+.recommendation-day-thread__actions button:focus-visible,
+.recommendation-day-thread__actions a:hover,
+.recommendation-day-thread__actions a:focus-visible {
   color: var(--coral);
 }
 
@@ -1273,6 +1294,16 @@
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 25px;
+}
+
+.recommendation-journey-error {
+  max-width: 62ch;
+  margin-top: 14px;
+  padding-left: 14px;
+  border-left: 2px solid var(--coral);
+  color: rgba(255, 253, 248, 0.82);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 :scope.dayweave-app--recommendation .recommendation-visual-hero__actions .button {
@@ -2772,7 +2803,7 @@
     grid-column: auto;
   }
 
-  .recommendation-day-thread footer a {
+  .recommendation-day-thread__actions {
     margin-top: 18px;
   }
 
@@ -3276,6 +3307,35 @@
   font-weight: 720;
 }
 
+.dayweave-app--live .live-journey-estimate-note {
+  width: min(100%, var(--editorial-width));
+  margin: 0 auto;
+  padding: 0 var(--editorial-gutter) 18px;
+  background: var(--paper);
+}
+
+.dayweave-app--live .live-journey-estimate-note summary {
+  width: fit-content;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 820;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.dayweave-app--live .live-journey-estimate-note ul {
+  display: grid;
+  gap: 5px;
+  max-width: 78ch;
+  margin: 12px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
 .dayweave-app--live .live-journey-clock {
   display: grid;
   grid-template-columns: auto auto;
@@ -3342,6 +3402,66 @@
   object-fit: cover;
   transform: scale(1.035);
   transition: transform 700ms var(--ease-out), object-position 700ms var(--ease-out);
+}
+
+.dayweave-app--live .live-journey-focus__fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 22%, rgba(255, 209, 83, 0.9) 0 10%, transparent 10.4%),
+    radial-gradient(circle at 78% 76%, rgba(177, 158, 234, 0.86) 0 14%, transparent 14.4%),
+    linear-gradient(145deg, #c8eced 0%, #d8efea 55%, #b9dcda 100%);
+}
+
+.dayweave-app--live .live-journey-focus__fallback > span {
+  position: absolute;
+  top: clamp(24px, 4vw, 54px);
+  left: clamp(24px, 4vw, 54px);
+  color: rgba(11, 47, 47, 0.72);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.dayweave-app--live .live-journey-focus__fallback > strong {
+  color: rgba(11, 47, 47, 0.18);
+  font-size: clamp(112px, 20vw, 270px);
+  font-weight: 650;
+  letter-spacing: -0.09em;
+  line-height: 0.8;
+}
+
+.dayweave-app--live .live-journey-focus__fallback > i {
+  position: absolute;
+  width: clamp(18px, 3vw, 42px);
+  aspect-ratio: 1;
+  background: rgba(11, 128, 125, 0.48);
+  box-shadow:
+    1.1em 0 0 rgba(11, 128, 125, 0.3),
+    0 1.1em 0 rgba(11, 128, 125, 0.22);
+}
+
+.dayweave-app--live .live-journey-focus__fallback > i:nth-of-type(1) {
+  top: 18%;
+  right: 16%;
+}
+
+.dayweave-app--live .live-journey-focus__fallback > i:nth-of-type(2) {
+  bottom: 17%;
+  left: 17%;
+  background: rgba(243, 119, 108, 0.62);
+}
+
+.dayweave-app--live .live-journey-focus__fallback > i:nth-of-type(3) {
+  right: 34%;
+  bottom: 30%;
+  background: rgba(170, 199, 48, 0.62);
+  transform: scale(0.7);
 }
 
 .dayweave-app--live .live-journey-focus__visual figcaption {
@@ -3543,6 +3663,35 @@
   font-weight: 540;
   letter-spacing: -0.03em;
   line-height: 1.2;
+}
+
+.dayweave-app--live .live-journey-insight__details {
+  max-width: 58ch;
+  margin-top: 7px;
+  color: rgba(255, 253, 248, 0.68);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.dayweave-app--live .live-journey-insight__details summary {
+  width: fit-content;
+  padding-bottom: 2px;
+  border-bottom: 1px solid rgba(255, 253, 248, 0.38);
+  color: rgba(255, 253, 248, 0.82);
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.dayweave-app--live .live-journey-insight__details p {
+  margin-top: 9px;
+}
+
+.dayweave-app--live .live-journey-insight__details a {
+  display: inline-block;
+  margin-top: 7px;
+  color: var(--paper);
+  text-decoration-color: var(--coral);
+  text-underline-offset: 3px;
 }
 
 .dayweave-app--live .live-journey-reassurance {
@@ -3811,6 +3960,10 @@
   .dayweave-app--live .live-journey-status {
     min-height: 76px;
     padding: 12px 20px;
+  }
+
+  .dayweave-app--live .live-journey-estimate-note {
+    padding: 0 20px 16px;
   }
 
   .dayweave-app--live .live-journey-clock {

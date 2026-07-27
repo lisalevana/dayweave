@@ -1,5 +1,6 @@
 export * from "./demo";
 export * from "./evidence";
+export * from "./materialize-recommendation";
 export * from "./optimizer";
 export * from "./replan";
 export * from "./time";

@@ -80,7 +80,7 @@ function googleMapsDirectionsUrl(
   stop: TimelineStop,
   place: Place | undefined,
   mode: TravelMode | undefined,
-  originLabel: string,
+  originLabel: string | undefined,
   region: string,
 ) {
   const destination = [stop.name, place?.area, region]
@@ -88,13 +88,40 @@ function googleMapsDirectionsUrl(
     .join(", ");
   const travelmode =
     mode === "walk" ? "walking" : mode === "transit" ? "transit" : "driving";
-  const params = new URLSearchParams({
-    api: "1",
-    origin: [originLabel, region].filter(Boolean).join(", "),
-    destination,
-    travelmode,
-  });
+  const params = new URLSearchParams({ api: "1", destination, travelmode });
+  if (originLabel) {
+    params.set(
+      "origin",
+      [originLabel, region].filter(Boolean).join(", "),
+    );
+  }
   return `https://www.google.com/maps/dir/?${params.toString()}`;
+}
+
+function isPlanningEstimate(leg: PlannedLeg | undefined) {
+  return (
+    leg?.source === "geographic_estimate" ||
+    leg?.source === "curated_sequence_estimate"
+  );
+}
+
+function planningLegCopy(leg: PlannedLeg, compact = false) {
+  if (leg.minutes === 0) {
+    return compact
+      ? "Same stop area · check Maps"
+      : "Same stop area · check Maps for the exact move";
+  }
+  if (leg.source === "curated_sequence_estimate") {
+    return compact
+      ? `${formatTimelineTime(leg.departMinute)} · allow ${leg.minutes} min · check Maps`
+      : `Suggested ${formatTimelineTime(leg.departMinute)} · allow ${leg.minutes} min planning buffer · check Maps`;
+  }
+  if (leg.source === "geographic_estimate") {
+    return compact
+      ? `${formatTimelineTime(leg.departMinute)} · about ${leg.minutes} min · check Maps`
+      : `Suggested ${formatTimelineTime(leg.departMinute)} · allow about ${leg.minutes} min · check Maps`;
+  }
+  return null;
 }
 
 function timeValue(minute: number) {
@@ -191,7 +218,29 @@ export function RouteTimeline({
           ? constraintReason(place)
           : null;
         const directionsUrl = showDirectionsLinks
-          ? googleMapsDirectionsUrl(stop, place, inboundLeg?.mode, previousLabel, directionsRegion)
+          ? googleMapsDirectionsUrl(
+              stop,
+              place,
+              inboundLeg?.mode,
+              stopIndex === 0 && isPlanningEstimate(inboundLeg)
+                ? undefined
+                : previousLabel,
+              directionsRegion,
+            )
+          : null;
+        const estimatedTravelFull = inboundLeg
+          ? stopIndex === 0 &&
+            isPlanningEstimate(inboundLeg) &&
+            inboundLeg.minutes === 0
+            ? "From your location · check Maps for the first stop"
+            : planningLegCopy(inboundLeg)
+          : null;
+        const estimatedTravelShort = inboundLeg
+          ? stopIndex === 0 &&
+            isPlanningEstimate(inboundLeg) &&
+            inboundLeg.minutes === 0
+            ? "From your location · check Maps"
+            : planningLegCopy(inboundLeg, true)
           : null;
 
         return (
@@ -212,8 +261,14 @@ export function RouteTimeline({
                 <p className="itinerary-travel">Memory tied</p>
               ) : inboundLeg ? (
                 <p className="itinerary-travel">
-                  <span className="itinerary-travel-full">Depart {formatTimelineTime(inboundLeg.departMinute)} · {travelModeLabel(inboundLeg.mode)} {inboundLeg.minutes} min from {previousLabel} · arrive {formatTimelineTime(inboundLeg.arriveMinute)}</span>
-                  <span className="itinerary-travel-short">{formatTimelineTime(inboundLeg.departMinute)} · {travelModeLabel(inboundLeg.mode)} {inboundLeg.minutes} min</span>
+                  <span className="itinerary-travel-full">
+                    {estimatedTravelFull ??
+                      `Depart ${formatTimelineTime(inboundLeg.departMinute)} · ${travelModeLabel(inboundLeg.mode)} ${inboundLeg.minutes} min from ${previousLabel} · arrive ${formatTimelineTime(inboundLeg.arriveMinute)}`}
+                  </span>
+                  <span className="itinerary-travel-short">
+                    {estimatedTravelShort ??
+                      `${formatTimelineTime(inboundLeg.departMinute)} · ${travelModeLabel(inboundLeg.mode)} ${inboundLeg.minutes} min`}
+                  </span>
                 </p>
               ) : null}
               <div className="itinerary-place-line">
@@ -290,15 +345,26 @@ export function RouteTimeline({
         </div>
         <span className="itinerary-rail" aria-hidden="true"><i>✓</i></span>
         <div className="itinerary-copy">
-          {returnLeg && (
+          {returnLeg &&
+            !(isPlanningEstimate(returnLeg) && returnLeg.minutes === 0) && (
             <p className="itinerary-travel">
-              <span className="itinerary-travel-full">Depart {formatTimelineTime(returnLeg.departMinute)} · {travelModeLabel(returnLeg.mode)} {returnLeg.minutes} min from {stops.at(-1)?.name ?? startLabel}</span>
-              <span className="itinerary-travel-short">{formatTimelineTime(returnLeg.departMinute)} · {travelModeLabel(returnLeg.mode)} {returnLeg.minutes} min</span>
+              <span className="itinerary-travel-full">
+                {planningLegCopy(returnLeg) ??
+                  `Depart ${formatTimelineTime(returnLeg.departMinute)} · ${travelModeLabel(returnLeg.mode)} ${returnLeg.minutes} min from ${stops.at(-1)?.name ?? startLabel}`}
+              </span>
+              <span className="itinerary-travel-short">
+                {planningLegCopy(returnLeg, true) ??
+                  `${formatTimelineTime(returnLeg.departMinute)} · ${travelModeLabel(returnLeg.mode)} ${returnLeg.minutes} min`}
+              </span>
             </p>
           )}
           <div className="itinerary-place-line">
             <h3>{endLabel}</h3>
-            <span>End of the planned day</span>
+            <span>
+              {isPlanningEstimate(returnLeg)
+                ? "Estimated day finish"
+                : "End of the planned day"}
+            </span>
           </div>
         </div>
       </li>

@@ -8,6 +8,7 @@ import {
   parseWikivoyageListings,
   parseWikivoyageTravelListings,
 } from "../lib/adapters/day-recommendations.server";
+import { materializeRecommendationDay } from "../lib/dayweave/materialize-recommendation";
 import {
   DayRecommendationBundleSchema,
   RecommendationRequestSchema,
@@ -75,6 +76,25 @@ describe("curated destination recommendations", () => {
     expect(
       bundle.orderedBriefs.some((brief) =>
         Object.prototype.hasOwnProperty.call(brief, "note"),
+      ),
+    ).toBe(false);
+
+    const liveJourney = materializeRecommendationDay(bundle, 1, {
+      date: "2026-10-17",
+      timezone: "Asia/Singapore",
+      startMinute: 9 * 60,
+      endMinute: 18 * 60,
+    });
+    expect(liveJourney.plan.feasible).toBe(true);
+    expect(liveJourney.plan.itinerary.map((stop) => stop.placeId)).toEqual([
+      "fort-canning-park",
+      "marina-bay-waterfront",
+      "east-coast-park",
+    ]);
+    expect(liveJourney.input.day.startLocationId).not.toContain("hong-kong");
+    expect(
+      liveJourney.input.places.some((place) =>
+        place.name.includes("Victoria Peak"),
       ),
     ).toBe(false);
   });
@@ -178,6 +198,24 @@ describe("curated destination recommendations", () => {
       /self-service cooking machine/i,
     );
     expect(body.bundle.unresolvedWishlistItems).toEqual([]);
+
+    const bundle = DayRecommendationBundleSchema.parse(body.bundle);
+    const suwonJourney = materializeRecommendationDay(bundle, 1, {
+      date: "2026-10-17",
+      timezone: "Asia/Seoul",
+    });
+    const seoulJourney = materializeRecommendationDay(bundle, 2, {
+      date: "2026-10-18",
+      timezone: "Asia/Seoul",
+    });
+    expect(suwonJourney.estimateBasis).toBe("geographic_estimate");
+    expect(suwonJourney.plan.itinerary.map((stop) => stop.placeId)).toEqual([
+      "samsung-innovation-museum-suwon",
+      "starfield-library-suwon",
+    ]);
+    expect(seoulJourney.plan.itinerary.map((stop) => stop.placeId)).toEqual([
+      "jamsil-hangang-ramyeon",
+    ]);
   });
 
   it("adds a Lovely Runner filming wish to the existing Suwon day", async () => {

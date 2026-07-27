@@ -226,13 +226,13 @@ export function buildRecoveryChoices(state: LiveDayState): RecoveryChoice[] {
   const protectReason: PlanReason = {
     code: "RECOVERY_PROTECT_MOMENTS",
     message:
-      "Keep must-visits, fixed bookings and verified timing windows; save lower-priority stops for another day when needed.",
+      "Keep the highest-priority remaining stops and finish near the original planned time; defer lower-priority stops when needed.",
   };
   const protectChoice: RecoveryChoice = {
     id: "protect_moments",
     title: "Protect the moments",
     description:
-      "Keep must-visits, bookings and timing wishes safe, with a calm finish near the original time.",
+      "Keep the highest-priority remaining stops with a calm finish near the original planned time.",
     valid: protectedState.currentPlan.feasible,
     state: protectedState,
     changes: [],
@@ -284,7 +284,7 @@ export function buildRecoveryChoices(state: LiveDayState): RecoveryChoice[] {
       code: "RECOVERY_KEEP_EVERY_STOP",
       message: keepPlan
         ? "Every previously chosen remaining stop is retained by using tighter transition buffers."
-        : "Keeping every stop is not feasible without breaking a confirmed window.",
+        : "Keeping every stop does not fit inside the recovery limit.",
       details: keepPlan ? { pace: "packed" } : undefined,
     },
   ];
@@ -304,7 +304,7 @@ export function buildRecoveryChoices(state: LiveDayState): RecoveryChoice[] {
       ? extensionMinutes > 0
         ? `Use tighter transitions, keep the route and finish about ${extensionMinutes} minutes later.`
         : "Use tighter transition buffers to keep the full chosen route without extending the day."
-      : "This path would break a confirmed time window, so it remains unavailable.",
+      : "Keeping every stop does not fit inside the recovery limit, so this path remains unavailable.",
     valid: Boolean(keepPlan),
     state: keepState,
     changes: keepPlan
@@ -472,7 +472,7 @@ function comparePlans(
         placeId: stop.placeId,
         type: "time_changed",
         reasonCode: eventReason,
-        message: `${stop.name} moved within its confirmed window.`,
+        message: `${stop.name} moved within the remaining plan.`,
         previousStartMinute: stop.startMinute,
         nextStartMinute: nextStop.startMinute,
       });
