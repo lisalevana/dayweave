@@ -12,14 +12,13 @@ import {
   useRef,
   useState,
   type ChangeEvent,
-  type DragEvent,
 } from "react";
 
 import {
   BAKEHOUSE_DONT_MISS_HERE,
   MAKS_NOODLE_DONT_MISS_HERE,
-  UPPER_LASCAR_ROW_SUGGESTION,
 } from "@/lib/adapters/experience-evidence";
+import { resolveSupportedHongKongPlaceId } from "@/lib/adapters/local-hong-kong-extraction";
 import { hongKongDemo } from "@/lib/dayweave/demo";
 import { materializeWishlistEnvelope } from "@/lib/dayweave/materialize-extraction";
 import { getTravelOptions, optimizeDay } from "@/lib/dayweave/optimizer";
@@ -39,9 +38,9 @@ import type {
   Priority,
   RecoveryChoice as EngineRecoveryChoice,
 } from "@/lib/dayweave/types";
+import type { DayRecommendationBundle } from "@/lib/schemas/evidence";
 
 import {
-  PlaceCharm,
   ThreadMap,
   type CharmPriority,
   type ThreadPlace,
@@ -51,13 +50,13 @@ import {
   RouteTimeline,
   travelModeLabel,
 } from "./route-timeline";
+import { DestinationCombobox } from "./destination-combobox";
 import { Wivi } from "./wivi";
 
 type Stage =
   | "opening"
-  | "import"
   | "confirm"
-  | "tangle"
+  | "recommendation"
   | "result"
   | "live"
   | "repair"
@@ -66,24 +65,51 @@ type Stage =
   | "memory";
 
 type ImportStatus = "idle" | "working" | "ready" | "error";
-type SupportSheet = "stay" | "break" | "skip" | "alternative" | null;
-type DiscoveryDecision = "pending" | "added" | "saved" | "declined";
+type PlanningMode = "adaptive" | "recommendation";
+type SupportSheet = "stay" | "break" | "skip" | null;
 type RecoveryChoiceId = EngineRecoveryChoice["id"] | null;
+type BriefingOrigin = "result" | "live";
+
+interface ExtractionCapabilities {
+  available: boolean;
+  screenshotAnalysisAvailable: boolean;
+  model?: string | null;
+}
+
+interface JourneySnapshot {
+  version: 1;
+  savedAt: string;
+  stage: "result" | "live";
+  demoMode: boolean;
+  places: Place[];
+  pace: Pace;
+  walkingKm: number;
+  plan: OptimizationResult;
+  liveState: LiveDayState | null;
+  nowMinute: number;
+  travelActive: boolean;
+  arrived: boolean;
+  recoveryApplied: boolean;
+  recoveryChoice: RecoveryChoiceId;
+  stayMinutes: 15 | 30 | 60 | null;
+  breakMinutes: number | null;
+  destination?: string;
+  planningMode?: PlanningMode;
+}
+
+const JOURNEY_STORAGE_KEY = "dayweave:journey:v1";
 
 const stageProgress: Record<Stage, number> = {
   opening: 0,
-  import: 1,
   confirm: 2,
-  tangle: 3,
-  result: 4,
-  live: 5,
-  repair: 5,
-  briefing: 5,
-  reweave: 5,
-  memory: 6,
+  recommendation: 2,
+  result: 3,
+  live: 3,
+  repair: 3,
+  briefing: 3,
+  reweave: 3,
+  memory: 3,
 };
-
-const priorityOrder: Priority[] = ["must", "love", "convenient"];
 
 const iconGlyphs: Record<string, string> = {
   temple: "寺",
@@ -113,6 +139,45 @@ const laneCopy: Record<Priority, { title: string; description: string }> = {
   },
 };
 
+const dontMissByPlaceId = {
+  "man-mo-temple": {
+    label: "Don’t miss here · Man Mo Temple",
+    summary: "Look up: the hanging spiral incense coils make the temple’s atmosphere unforgettable.",
+  },
+  "tai-kwun": {
+    label: "Don’t miss here · Tai Kwun",
+    summary: "Pause in the historic courtyards, where old police buildings meet contemporary art.",
+  },
+  "victoria-peak": {
+    label: "Don’t miss here · Victoria Peak",
+    summary: "Protect the golden-hour window so the harbour changes from daylight to city lights.",
+  },
+  "maks-noodle": {
+    label: "Don’t miss here · Mak’s Noodle",
+    summary: "The signature bowl pairs bouncy shrimp wontons with springy duck-egg noodles.",
+  },
+  pmq: {
+    label: "Don’t miss here · PMQ",
+    summary: "Browse the small independent Hong Kong design studios, not only the central courtyard.",
+  },
+  "bakehouse-soho": {
+    label: "Don’t miss here · Bakehouse SoHo",
+    summary: "If one bake fits, make it the sourdough egg tart.",
+  },
+  "mid-levels-escalator": {
+    label: "Don’t miss here · Mid-Levels Escalator",
+    summary: "Notice how the city changes block by block as the moving walkway climbs through Central.",
+  },
+  "star-ferry-central": {
+    label: "Don’t miss here · Star Ferry",
+    summary: "Take the harbour-facing side and let the skyline unfold from the water.",
+  },
+  "temple-street-market": {
+    label: "Don’t miss here · Temple Street",
+    summary: "Come after dark for the street atmosphere, open-air stalls and late-night energy.",
+  },
+} as const;
+
 const stageMotion = {
   initial: { opacity: 0, y: 14 },
   animate: { opacity: 1, y: 0 },
@@ -139,13 +204,57 @@ function toThreadPlace(place: Place): ThreadPlace {
   };
 }
 
-function nextPriority(priority: Priority): Priority {
-  const index = priorityOrder.indexOf(priority);
-  return priorityOrder[(index + 1) % priorityOrder.length];
-}
-
 function sleep(milliseconds: number) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function directionsUrl(
+  placeName: string,
+  area?: string,
+  originName = "Your starting point",
+  region = "",
+) {
+  const params = new URLSearchParams({
+    api: "1",
+    origin: [originName, region].filter(Boolean).join(", "),
+    destination: [placeName, area, region].filter(Boolean).join(", "),
+  });
+  return `https://www.google.com/maps/dir/?${params.toString()}`;
+}
+
+function placeSearchUrl(placeName: string, destination: string) {
+  const params = new URLSearchParams({
+    api: "1",
+    query: mapsPlaceQuery(placeName, destination),
+  });
+  return `https://www.google.com/maps/search/?${params.toString()}`;
+}
+
+function mapsPlaceQuery(placeName: string, area: string) {
+  const normalizedName = placeName.toLocaleLowerCase("en");
+  const normalizedArea = area.trim().toLocaleLowerCase("en");
+  return normalizedArea && !normalizedName.includes(normalizedArea)
+    ? `${placeName}, ${area.trim()}`
+    : placeName;
+}
+
+function recommendationDirectionsUrl(places: readonly Place[], destination: string) {
+  if (places.length === 0) return placeSearchUrl(destination, destination);
+  if (places.length === 1) {
+    return placeSearchUrl(places[0].name, places[0].area || destination);
+  }
+
+  const queries = places.map((place) =>
+    mapsPlaceQuery(place.name, place.area || destination),
+  );
+  const params = new URLSearchParams({
+    api: "1",
+    origin: queries[0],
+    destination: queries.at(-1) ?? queries[0],
+    travelmode: "transit",
+  });
+  if (queries.length > 2) params.set("waypoints", queries.slice(1, -1).join("|"));
+  return `https://www.google.com/maps/dir/?${params.toString()}`;
 }
 
 function baselineRoute(input: OptimizationInput, order: readonly string[]) {
@@ -178,11 +287,11 @@ function ProgressDots({ stage }: { stage: Stage }) {
       role="progressbar"
       aria-label="Day planning progress"
       aria-valuemin={1}
-      aria-valuemax={6}
+      aria-valuemax={3}
       aria-valuenow={Math.max(1, current)}
-      aria-valuetext={`Journey step ${Math.max(1, current)} of 6`}
+      aria-valuetext={`Planning step ${Math.max(1, current)} of 3`}
     >
-      {Array.from({ length: 6 }, (_, index) => (
+      {Array.from({ length: 3 }, (_, index) => (
         <i
           key={index}
           className={
@@ -202,25 +311,29 @@ function ProgressDots({ stage }: { stage: Stage }) {
 export default function DayWeaveApp() {
   const reduceMotion = useReducedMotion();
   const [stage, setStage] = useState<Stage>("opening");
+  const [destination, setDestination] = useState("");
+  const [planningMode, setPlanningMode] = useState<PlanningMode>("adaptive");
   const [rawWishlist, setRawWishlist] = useState("");
   const [demoMode, setDemoMode] = useState(false);
   const [importStatus, setImportStatus] = useState<ImportStatus>("idle");
   const [importMessage, setImportMessage] = useState("");
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [uploadName, setUploadName] = useState("");
+  const [confirmationPrompts, setConfirmationPrompts] = useState<string[]>([]);
+  const [unresolvedItems, setUnresolvedItems] = useState<string[]>([]);
+  const [unconfirmedPriorityIds, setUnconfirmedPriorityIds] = useState<string[]>([]);
+  const [recommendationBundle, setRecommendationBundle] =
+    useState<DayRecommendationBundle | null>(null);
+  const [extractionCapabilities, setExtractionCapabilities] =
+    useState<ExtractionCapabilities | null>(null);
   const [places, setPlaces] = useState<Place[]>(() =>
     hongKongDemo.input.places.map((place) => ({ ...place })),
   );
   const [pace, setPace] = useState<Pace>("balanced");
   const [walkingKm, setWalkingKm] = useState(3.6);
-  const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [dragTarget, setDragTarget] = useState<Priority | null>(null);
   const [isUntangling, setIsUntangling] = useState(false);
-  const [threadUntangled, setThreadUntangled] = useState(false);
   const [plan, setPlan] = useState<OptimizationResult | null>(null);
-  const [, setDiscoveryDecision] =
-    useState<DiscoveryDecision>("pending");
-  const [discoveryMessage, setDiscoveryMessage] = useState("");
+  const [verificationAccepted, setVerificationAccepted] = useState(false);
   const [liveState, setLiveState] = useState<LiveDayState | null>(null);
   const [pendingDelayState, setPendingDelayState] =
     useState<LiveDayState | null>(null);
@@ -240,8 +353,15 @@ export default function DayWeaveApp() {
   const [liveNotice, setLiveNotice] = useState("");
   const [nowMinute, setNowMinute] = useState(hongKongDemo.input.day.startMinute);
   const [announcement, setAnnouncement] = useState("");
+  const [savedJourney, setSavedJourney] = useState<JourneySnapshot | null>(null);
+  const [briefingPlaceId, setBriefingPlaceId] = useState<
+    "maks-noodle" | "bakehouse-soho"
+  >("maks-noodle");
+  const [briefingOrigin, setBriefingOrigin] =
+    useState<BriefingOrigin>("live");
   const headingRef = useRef<HTMLHeadingElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const savedPlacesInputRef = useRef<HTMLTextAreaElement | null>(null);
   const sheetRef = useRef<HTMLButtonElement | null>(null);
   const supportTriggerRef = useRef<HTMLButtonElement | null>(null);
 
@@ -260,19 +380,30 @@ export default function DayWeaveApp() {
 
   const tangledPlaces = useMemo(() => {
     const byId = new Map(places.map((place) => [place.id, place]));
-    const ordered = hongKongDemo.tangledOrder
+    const sourceOrder = demoMode
+      ? hongKongDemo.tangledOrder
+      : places.map((place) => place.id);
+    const ordered = sourceOrder
       .map((id) => byId.get(id))
       .filter((place): place is Place => Boolean(place));
     const extras = places.filter(
-      (place) => !hongKongDemo.tangledOrder.includes(place.id),
+      (place) => !sourceOrder.includes(place.id),
     );
     return [...ordered, ...extras].map(toThreadPlace);
-  }, [places]);
+  }, [demoMode, places]);
 
-  const baseline = useMemo(
-    () => baselineRoute(optimizationInput, hongKongDemo.tangledOrder),
-    [optimizationInput],
-  );
+  const baseline = useMemo(() => {
+    const sourceOrder = demoMode
+      ? hongKongDemo.tangledOrder
+      : places.map((place) => place.id);
+    const selectedIds = plan
+      ? new Set(plan.itinerary.map((stop) => stop.placeId))
+      : null;
+    const comparableOrder = selectedIds
+      ? sourceOrder.filter((id) => selectedIds.has(id))
+      : sourceOrder;
+    return baselineRoute(optimizationInput, comparableOrder);
+  }, [demoMode, optimizationInput, places, plan]);
 
   const livePlan = liveState?.currentPlan ?? plan;
   const plannedStops = livePlan?.itinerary ?? [];
@@ -288,6 +419,87 @@ export default function DayWeaveApp() {
   }, [stage]);
 
   useEffect(() => {
+    let active = true;
+    fetch("/api/extract", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((capabilities: ExtractionCapabilities) => {
+        if (active) setExtractionCapabilities(capabilities);
+      })
+      .catch(() => {
+        if (active) {
+          setExtractionCapabilities({
+            available: false,
+            screenshotAnalysisAvailable: false,
+          });
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        const rawSnapshot = window.localStorage.getItem(JOURNEY_STORAGE_KEY);
+        if (!rawSnapshot) return;
+        const snapshot = JSON.parse(rawSnapshot) as JourneySnapshot;
+        if (snapshot.version === 1 && snapshot.plan && Array.isArray(snapshot.places)) {
+          setSavedJourney(snapshot);
+        }
+      } catch {
+        window.localStorage.removeItem(JOURNEY_STORAGE_KEY);
+      }
+    }, 0);
+    return () => window.clearTimeout(restoreTimer);
+  }, []);
+
+  useEffect(() => {
+    if (!plan) return;
+    const snapshot: JourneySnapshot = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      stage: liveState ? "live" : "result",
+      demoMode,
+      places,
+      pace,
+      walkingKm,
+      plan,
+      liveState,
+      nowMinute,
+      travelActive,
+      arrived,
+      recoveryApplied,
+      recoveryChoice,
+      stayMinutes,
+      breakMinutes,
+      destination,
+      planningMode,
+    };
+    try {
+      window.localStorage.setItem(JOURNEY_STORAGE_KEY, JSON.stringify(snapshot));
+    } catch {
+      // The journey still works when private browsing blocks local storage.
+    }
+  }, [
+    arrived,
+    breakMinutes,
+    demoMode,
+    destination,
+    liveState,
+    nowMinute,
+    pace,
+    places,
+    plan,
+    planningMode,
+    recoveryApplied,
+    recoveryChoice,
+    stayMinutes,
+    travelActive,
+    walkingKm,
+  ]);
+
+  useEffect(() => {
     if (!supportSheet) return;
     window.requestAnimationFrame(() => sheetRef.current?.focus());
   }, [supportSheet]);
@@ -297,24 +509,56 @@ export default function DayWeaveApp() {
     window.requestAnimationFrame(() => supportTriggerRef.current?.focus());
   }
 
-  function resetApp() {
+  function resetApp({
+    preserveSavedJourney = false,
+  }: {
+    preserveSavedJourney?: boolean;
+  } = {}) {
+    const journeyToPreserve: JourneySnapshot | null =
+      preserveSavedJourney && plan
+        ? {
+            version: 1,
+            savedAt: new Date().toISOString(),
+            stage: liveState ? "live" : "result",
+            demoMode,
+            places,
+            pace,
+            walkingKm,
+            plan,
+            liveState,
+            nowMinute,
+            travelActive,
+            arrived,
+            recoveryApplied,
+            recoveryChoice,
+            stayMinutes,
+            breakMinutes,
+            destination,
+            planningMode,
+          }
+        : preserveSavedJourney
+          ? savedJourney
+          : null;
+
     setStage("opening");
+    setDestination("");
+    setPlanningMode("adaptive");
     setRawWishlist("");
     setDemoMode(false);
     setImportStatus("idle");
     setImportMessage("");
     setImageDataUrl(null);
     setUploadName("");
+    setConfirmationPrompts([]);
+    setUnresolvedItems([]);
+    setUnconfirmedPriorityIds([]);
+    setRecommendationBundle(null);
     setPlaces(hongKongDemo.input.places.map((place) => ({ ...place })));
     setPace("balanced");
     setWalkingKm(3.6);
-    setDraggingId(null);
-    setDragTarget(null);
     setIsUntangling(false);
-    setThreadUntangled(false);
     setPlan(null);
-    setDiscoveryDecision("pending");
-    setDiscoveryMessage("");
+    setVerificationAccepted(false);
     setLiveState(null);
     setPendingDelayState(null);
     setRecoveryOptions([]);
@@ -329,38 +573,162 @@ export default function DayWeaveApp() {
     setBreakMinutes(null);
     setLiveNotice("");
     setNowMinute(hongKongDemo.input.day.startMinute);
-    setAnnouncement("DayWeave reset.");
+    setBriefingPlaceId("maks-noodle");
+    setBriefingOrigin("live");
+    setSavedJourney(journeyToPreserve);
+    try {
+      if (journeyToPreserve) {
+        window.localStorage.setItem(
+          JOURNEY_STORAGE_KEY,
+          JSON.stringify(journeyToPreserve),
+        );
+      } else if (!preserveSavedJourney) {
+        window.localStorage.removeItem(JOURNEY_STORAGE_KEY);
+      }
+    } catch {
+      // Nothing else is required when storage is unavailable.
+    }
+    setAnnouncement(
+      preserveSavedJourney && journeyToPreserve
+        ? "Your current day is saved. Choose another destination when you are ready."
+        : "DayWeave reset.",
+    );
   }
 
-  function openImport(useDemo: boolean) {
-    setDemoMode(useDemo);
-    setRawWishlist(useDemo ? hongKongDemo.messyWishlist : "");
-    setImportStatus("idle");
-    setImportMessage("");
-    setStage("import");
+  function exploreAnotherPlace() {
+    resetApp({ preserveSavedJourney: true });
+    window.requestAnimationFrame(() =>
+      window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" }),
+    );
   }
 
-  function previewDemoDay() {
-    const demoPlaces = hongKongDemo.input.places.map((place) => ({ ...place }));
-    const demoInput: OptimizationInput = {
-      ...hongKongDemo.input,
-      places: demoPlaces,
+  function handleBrandClick() {
+    if (stage === "opening") {
+      window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });
+      return;
+    }
+    exploreAnotherPlace();
+  }
+
+  function continueSavedJourney() {
+    if (!savedJourney) return;
+    setRecommendationBundle(null);
+    setDemoMode(savedJourney.demoMode);
+    setPlaces(savedJourney.places);
+    setPace(savedJourney.pace);
+    setWalkingKm(savedJourney.walkingKm);
+    setPlan(savedJourney.plan);
+    setLiveState(savedJourney.liveState);
+    setNowMinute(savedJourney.nowMinute);
+    setTravelActive(savedJourney.travelActive);
+    setArrived(savedJourney.arrived);
+    setRecoveryApplied(savedJourney.recoveryApplied);
+    setRecoveryChoice(savedJourney.recoveryChoice);
+    setStayMinutes(savedJourney.stayMinutes);
+    setBreakMinutes(savedJourney.breakMinutes);
+    setDestination(savedJourney.destination ?? "Hong Kong");
+    setPlanningMode(savedJourney.planningMode ?? "adaptive");
+    setStage(savedJourney.stage);
+    setAnnouncement(savedJourney.stage === "live" ? "Your live day was restored." : "Your woven day was restored.");
+  }
+
+  async function loadHongKongExample() {
+    const demoWishlist = hongKongDemo.messyWishlist;
+    setDestination("Hong Kong");
+    setPlanningMode("recommendation");
+    setRecommendationBundle(null);
+    setDemoMode(false);
+    setRawWishlist(demoWishlist);
+    setImageDataUrl(null);
+    setUploadName("");
+    setVerificationAccepted(false);
+    setImportStatus("working");
+    setImportMessage("Opening the Hong Kong story…");
+
+    try {
+      await sleep(reduceMotion ? 20 : 260);
+      await loadServiceRecommendations("Hong Kong", {
+        rawWishlist: "Man Mo Temple\nStar Ferry\nVictoria Peak",
+        continueIntoDemo: true,
+      });
+    } catch (error) {
+      setImportStatus("error");
+      setImportMessage(
+        error instanceof Error
+          ? error.message
+          : "The Hong Kong story could not open just yet. Try again.",
+      );
+    }
+  }
+
+  async function loadServiceRecommendations(
+    requestedDestination = destination.trim(),
+    options: {
+      rawWishlist?: string;
+      continueIntoDemo?: boolean;
+    } = {},
+  ) {
+    const response = await fetch("/api/recommendations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        destination: requestedDestination,
+        rawWishlist: options.rawWishlist ?? rawWishlist,
+      }),
+    });
+    const body = (await response.json()) as {
+      ok?: boolean;
+      bundle?: DayRecommendationBundle;
+      error?: { message?: string };
     };
-    const demoPlan = optimizeDay(demoInput);
 
-    setDemoMode(true);
-    setRawWishlist(hongKongDemo.messyWishlist);
-    setPlaces(demoPlaces);
-    setPace(hongKongDemo.input.day.pace);
-    setWalkingKm(hongKongDemo.input.day.maxWalkingKm);
-    setThreadUntangled(true);
-    setPlan(demoPlan);
-    setDiscoveryDecision("pending");
-    setDiscoveryMessage("");
-    setLiveState(null);
-    setLiveChanges([]);
-    setAnnouncement("The ready Hong Kong day is open in one clear itinerary.");
-    setStage("result");
+    if (!response.ok || !body.ok || !body.bundle) {
+      const reason =
+        body.error?.message ??
+        "DayWeave could not reach enough destination knowledge for a trustworthy recommendation.";
+      throw new Error(
+        `${reason} Your saved places are still here. Try again shortly or open the Hong Kong example while DayWeave adds this source.`,
+      );
+    }
+
+    const bundle = body.bundle;
+    const recommendedPlaces = bundle.orderedBriefs.map((brief, index) => ({
+      id: brief.placeId,
+      name: brief.placeName,
+      area: brief.mapsArea ?? bundle.destination,
+      priority: index === 0 ? "must" as const : "love" as const,
+      durationMinutes: 60,
+      openingWindows: [],
+      source: brief.origin === "saved" ? "user" as const : "approved_discovery" as const,
+      icon: index === 0 ? "temple" : index === 1 ? "sunset" : "curio",
+    }));
+
+    setDestination(bundle.destination);
+    setPlanningMode("recommendation");
+    setRecommendationBundle(bundle);
+    setDemoMode(options.continueIntoDemo === true);
+    setPlaces(recommendedPlaces);
+    setUnconfirmedPriorityIds([]);
+    setConfirmationPrompts([]);
+    setUnresolvedItems([]);
+    setVerificationAccepted(true);
+    setPlan(null);
+    setImportStatus("ready");
+    setImportMessage(
+      `${bundle.orderedBriefs.length} destination-backed stops found. DayWeave has made the recommendation and surfaced what not to miss.`,
+    );
+    setAnnouncement(`DayWeave recommendation ready for ${bundle.destination}.`);
+    setStage("recommendation");
+  }
+
+  function openBriefing(
+    placeId: "maks-noodle" | "bakehouse-soho",
+    origin: BriefingOrigin,
+  ) {
+    setBriefingPlaceId(placeId);
+    setBriefingOrigin(origin);
+    setStage("briefing");
+    setAnnouncement(`Don’t Miss Here opened for ${placeId === "maks-noodle" ? "Mak’s Noodle" : "Bakehouse SoHo"}.`);
   }
 
   async function handleScreenshot(event: ChangeEvent<HTMLInputElement>) {
@@ -396,25 +764,47 @@ export default function DayWeaveApp() {
     setImportMessage("Screenshot ready. It will be discarded immediately after processing.");
   }
 
-  async function handleExtraction() {
-    if (!rawWishlist.trim() && !imageDataUrl) {
+  async function handleExtraction(destinationOverride?: string) {
+    const requestedDestination = (
+      destinationOverride ?? destination
+    ).trim();
+    if (!requestedDestination) {
       setImportStatus("error");
-      setImportMessage("Paste a wishlist or choose a screenshot first.");
+      setImportMessage("Choose a country or type a city, island or region first.");
       return;
     }
 
+    const destinationIsHongKong =
+      /^(?:hong\s*kong|hongkong|hk)$/i.test(requestedDestination);
+
     setImportStatus("working");
-    setImportMessage("Separating wishes from constraints…");
+    setImportMessage(
+      destinationIsHongKong && imageDataUrl
+        ? "Separating wishes from constraints…"
+        : "Finding the thread and what not to miss…",
+    );
+    setVerificationAccepted(false);
 
     try {
       if (demoMode) {
         await sleep(reduceMotion ? 20 : 620);
         setPlaces(hongKongDemo.input.places.map((place) => ({ ...place })));
+        setConfirmationPrompts([]);
+        setUnresolvedItems([]);
+        setUnconfirmedPriorityIds([]);
+        setPlanningMode("adaptive");
         setImportStatus("ready");
         setImportMessage(
           "Nine places found. Three feel non-negotiable, one booking is fixed and two timing wishes need protecting.",
         );
         setAnnouncement("Seeded wishlist structured into nine places.");
+        setStage("confirm");
+        return;
+      }
+
+      if (!destinationIsHongKong || !imageDataUrl) {
+        await sleep(reduceMotion ? 20 : 260);
+        await loadServiceRecommendations(requestedDestination);
         return;
       }
 
@@ -452,16 +842,27 @@ export default function DayWeaveApp() {
         hongKongDemo.input.places,
       );
       if (materialized.places.length < 3) {
-        setImportStatus("error");
-        setImportMessage(
-          materialized.places.length === 0
-            ? "I couldn’t match a supported Hong Kong place yet. Try Man Mo Temple, Tai Kwun, Star Ferry or Victoria Peak."
-            : `I matched ${materialized.places.length} supported ${materialized.places.length === 1 ? "place" : "places"}. Add at least ${3 - materialized.places.length} more so DayWeave can shape a useful day.`,
+        throw new Error(
+          "I found fewer than three supported Hong Kong places. Add another saved place or open the complete example.",
         );
-        return;
       }
 
+      setPlanningMode("adaptive");
+      setRecommendationBundle(null);
       setPlaces(materialized.places);
+      setConfirmationPrompts(
+        materialized.extraction?.confirmationPrompts.filter(
+          (prompt) => !prompt.startsWith("Confirm the priority and timing for "),
+        ) ?? [],
+      );
+      setUnresolvedItems(materialized.extraction?.unresolvedItems ?? []);
+      setUnconfirmedPriorityIds(
+        materialized.extraction?.places.flatMap((place) => {
+          if (place.priorityIntent !== "unconfirmed") return [];
+          const id = resolveSupportedHongKongPlaceId(place.normalizedName);
+          return id ? [id] : [];
+        }) ?? [],
+      );
       if (materialized.pace) setPace(materialized.pace);
       if (materialized.walkingKm) setWalkingKm(materialized.walkingKm);
       setDemoMode(false);
@@ -478,12 +879,13 @@ export default function DayWeaveApp() {
       setAnnouncement(
         `${materialized.places.length} wishlist places structured.`,
       );
+      setStage("confirm");
     } catch (error) {
       setImportStatus("error");
       setImportMessage(
         error instanceof Error
           ? error.message
-          : "I couldn’t read those notes yet. Paste the place names as text or open the sample day.",
+          : "I couldn’t build that recommendation yet. Try Seoul, Singapore, Cheung Chau, Johor Bahru, or the Hong Kong demo.",
       );
     } finally {
       setImageDataUrl(null);
@@ -492,14 +894,40 @@ export default function DayWeaveApp() {
     }
   }
 
-  function useDemoFallback() {
+  function openAdaptiveHongKongDemo() {
+    const demoPlan = optimizeDay(hongKongDemo.input);
+    setDestination("Hong Kong");
+    setPlanningMode("adaptive");
+    setRecommendationBundle(null);
     setDemoMode(true);
     setRawWishlist(hongKongDemo.messyWishlist);
     setPlaces(hongKongDemo.input.places.map((place) => ({ ...place })));
+    setConfirmationPrompts([]);
+    setUnresolvedItems([]);
+    setUnconfirmedPriorityIds([]);
+    setPace(hongKongDemo.input.day.pace);
+    setWalkingKm(hongKongDemo.input.day.maxWalkingKm);
+    setPlan(demoPlan);
+    setLiveState(null);
+    setPendingDelayState(null);
+    setRecoveryOptions([]);
+    setLiveChanges([]);
+    setTravelActive(false);
+    setArrived(false);
+    setRecoveryApplied(false);
+    setRecoveryChoice(null);
+    setStayMinutes(null);
+    setBreakMinutes(null);
+    setNowMinute(hongKongDemo.input.day.startMinute);
     setImportStatus("ready");
     setImportMessage(
-      "Seeded demo loaded. This is deterministic demo data, not live analysis.",
+      "The full adaptive Hong Kong day is ready. This is deterministic demo data, not live analysis.",
     );
+    setVerificationAccepted(true);
+    setAnnouncement(
+      `${demoPlan.metrics.selectedCount} Hong Kong stops are woven. The live journey is ready to demonstrate.`,
+    );
+    setStage("result");
   }
 
   function movePriority(placeId: string, priority: Priority) {
@@ -508,21 +936,14 @@ export default function DayWeaveApp() {
         place.id === placeId ? { ...place, priority } : place,
       ),
     );
+    setUnconfirmedPriorityIds((current) => current.filter((id) => id !== placeId));
     setAnnouncement(
       `${places.find((place) => place.id === placeId)?.name ?? "Place"} moved to ${laneCopy[priority].title}.`,
     );
   }
 
-  function handleDrop(event: DragEvent<HTMLElement>, priority: Priority) {
-    event.preventDefault();
-    if (draggingId) movePriority(draggingId, priority);
-    setDraggingId(null);
-    setDragTarget(null);
-  }
-
   async function handleUntangle() {
     setIsUntangling(true);
-    setThreadUntangled(true);
     const nextPlan = optimizeDay(optimizationInput);
     setPlan(nextPlan);
     setAnnouncement(
@@ -533,45 +954,6 @@ export default function DayWeaveApp() {
     await sleep(reduceMotion ? 30 : 860);
     setIsUntangling(false);
     setStage("result");
-  }
-
-  function decideDiscovery(decision: Exclude<DiscoveryDecision, "pending">) {
-    const beforeFingerprint = plan?.fingerprint;
-    setDiscoveryDecision(decision);
-
-    if (decision === "added") {
-      const nextPlaces = places.some(
-        (place) => place.id === hongKongDemo.discovery.place.id,
-      )
-        ? places
-        : [...places, hongKongDemo.discovery.place];
-      const nextInput: OptimizationInput = {
-        ...optimizationInput,
-        places: nextPlaces,
-      };
-      const nextPlan = optimizeDay(nextInput);
-      setPlaces(nextPlaces);
-      setPlan(nextPlan);
-      const fitted = nextPlan.itinerary.some(
-        (stop) => stop.placeId === hongKongDemo.discovery.place.id,
-      );
-      setDiscoveryMessage(
-        fitted
-          ? "Upper Lascar Row now fits without displacing a protected moment. You chose this change."
-          : "Upper Lascar Row is approved, but this version still saves it for another day rather than forcing it in.",
-      );
-      setAnnouncement("Discovery decision applied and route recalculated.");
-      return;
-    }
-
-    setDiscoveryMessage(
-      decision === "saved"
-        ? "Saved for later. Today’s route is unchanged."
-        : "No problem. Today’s route is unchanged.",
-    );
-    if (beforeFingerprint && plan?.fingerprint === beforeFingerprint) {
-      setAnnouncement("Discovery declined. The plan stayed unchanged.");
-    }
   }
 
   function beginDay() {
@@ -625,7 +1007,7 @@ export default function DayWeaveApp() {
     setArrived(false);
     setTravelActive(false);
     setSupportMenuOpen(false);
-    setLiveNotice(`${currentStop.name} is now a memory knot in your thread.`);
+    setLiveNotice("");
     setAnnouncement(`${currentStop.name} completed. The remaining route is unchanged.`);
   }
 
@@ -650,6 +1032,11 @@ export default function DayWeaveApp() {
   function chooseRecovery(choiceId: Exclude<RecoveryChoiceId, null>) {
     const choice = recoveryOptions.find((option) => option.id === choiceId);
     if (!choice?.valid) return;
+    const originalRemainingIds = new Set(liveState?.currentPlan.itinerary.map((stop) => stop.placeId) ?? []);
+    const nextIds = new Set(choice.state.currentPlan.itinerary.map((stop) => stop.placeId));
+    const deferredNames = places
+      .filter((place) => originalRemainingIds.has(place.id) && !nextIds.has(place.id))
+      .map((place) => place.name);
     setLiveState(choice.state);
     setLiveChanges(choice.changes);
     setRecoveryChoice(choiceId);
@@ -659,12 +1046,12 @@ export default function DayWeaveApp() {
     setSupportMenuOpen(false);
     setLiveNotice(
       choiceId === "protect_moments"
-        ? "The day changed, but your sunset and lunch booking are still safe."
+        ? "The day changed, but every remaining protected timing and fixed booking is still safe."
         : "Every chosen stop stays. You approved tighter transition buffers.",
     );
     setAnnouncement(
       choiceId === "protect_moments"
-        ? "Protect the moments selected. PMQ is saved for another day."
+        ? `Protect the moments selected.${deferredNames.length > 0 ? ` ${deferredNames.join(", ")} ${deferredNames.length === 1 ? "is" : "are"} saved for another day.` : " No additional stop was deferred."}`
         : "Keep every stop selected. Tighter transition buffers were applied with permission.",
     );
     setStage("live");
@@ -699,7 +1086,10 @@ export default function DayWeaveApp() {
       minutes: 25,
       label: "A guilt-free pause",
     });
-    if (!result.accepted) return;
+    if (!result.accepted) {
+      setLiveNotice(result.reasons[0]?.message ?? "That break could not be protected yet.");
+      return;
+    }
     setLiveState(result.state);
     setLiveChanges(result.changes);
     setBreakMinutes(25);
@@ -717,7 +1107,10 @@ export default function DayWeaveApp() {
       type: "skip",
       placeId: currentStop.placeId,
     });
-    if (!result.accepted) return;
+    if (!result.accepted) {
+      setLiveNotice(result.reasons[0]?.message ?? "That stop could not be skipped yet.");
+      return;
+    }
     setLiveState(result.state);
     setLiveChanges(result.changes);
     setNowMinute(result.state.currentMinute);
@@ -734,27 +1127,30 @@ export default function DayWeaveApp() {
     setAnnouncement("Your memory thread is ready.");
   }
 
+  function confirmEndDay() {
+    if (!window.confirm("End this route here and keep the moments you completed?")) return;
+    setSupportMenuOpen(false);
+    setSupportSheet(null);
+    finishDay();
+  }
+
   function renderHeader() {
     return (
       <header className="app-header">
-        <button className="brand-button" type="button" onClick={resetApp} aria-label="DayWeave home">
+        <button className="brand-button" type="button" onClick={handleBrandClick} aria-label="DayWeave home">
           <span className="thread-mark" aria-hidden="true" />
           <span className="brand-copy">
             <strong>DayWeave</strong>
-            <small>Powered by AURORA</small>
+            <small>Moments over checklists</small>
           </span>
         </button>
-        <div className="header-status" aria-label="Demo availability">
+        <div className="header-status" aria-label="DayWeave’s core flow">
           <span className="offline-dot" aria-hidden="true" />
-          Hong Kong demo ready offline
+          Destination → what not to miss
         </div>
-        {stage === "opening" ? (
-          <button className="header-action" type="button" onClick={previewDemoDay}>
-            See sample day
-          </button>
-        ) : (
-          <button className="header-action" type="button" onClick={resetApp}>
-            Start over
+        {stage !== "opening" && (
+          <button className="header-action" type="button" onClick={exploreAnotherPlace}>
+            Explore another place
           </button>
         )}
       </header>
@@ -762,274 +1158,732 @@ export default function DayWeaveApp() {
   }
 
   function renderOpening() {
+    function updateDestination(value: string) {
+      if (demoMode) {
+        setRawWishlist("");
+        setImageDataUrl(null);
+        setUploadName("");
+      }
+      setDestination(value);
+      setDemoMode(false);
+      setPlanningMode("recommendation");
+      setRecommendationBundle(null);
+      setImportStatus("idle");
+      setImportMessage("");
+    }
+
     return (
       <section className="screen opening-screen" aria-labelledby="opening-title">
-        <div className="opening-copy">
-          <p className="eyebrow">For the trip you’ve been saving for.</p>
-          <h1 id="opening-title">Make time for what matters.</h1>
-          <p className="opening-lede">
-            You chose the places. DayWeave helps the important ones fit, adapts when the day changes and tells you what not to miss.
-          </p>
-          <span className="brand-promise">
-            You chose the places. We make the most important ones fit.
-          </span>
-          <div className="action-row">
-            <button className="button button--primary" type="button" onClick={() => openImport(false)}>
-              <span className="button-icon" aria-hidden="true">⌁</span>
-              Untangle my day
-            </button>
-            <button className="button button--sky" type="button" onClick={() => openImport(true)} data-testid="try-demo">
-              Try the Hong Kong demo
-            </button>
-          </div>
-        </div>
-        <button
-          className="opening-postcard-art"
-          type="button"
-          onClick={previewDemoDay}
-          aria-label="Open the ready Hong Kong itinerary from the DayWeave postcard"
-          data-testid="postcard-demo"
-        >
-          <Image
-            src="/og.png"
-            alt="DayWeave postcard showing a coral thread weaving through a temple, noodles and sunset toward Wivi above the Hong Kong harbour"
-            width={1731}
-            height={909}
-            priority
-            unoptimized
-          />
-          <span className="postcard-art-callout">
-            Open the ready Hong Kong day <span aria-hidden="true">→</span>
-          </span>
-        </button>
-      </section>
-    );
-  }
-
-  function renderImport() {
-    return (
-      <section className="screen" aria-labelledby="import-title">
-        <div className="screen-inner">
-          <div className="screen-heading heading-with-wivi">
-            <div>
-              <p className="step-label">1 · Bring the wishes</p>
-              <h1 id="import-title" tabIndex={-1} ref={headingRef}>Start with the places already in your heart.</h1>
-              <p>Paste the beautiful mess. DayWeave separates places, bookings and wishes—then you confirm what it understood.</p>
-              <ProgressDots stage={stage} />
-            </div>
-            <Wivi mood="tangled" />
+        <div className="opening-hero">
+          <div className="opening-postcard-art" aria-label="DayWeave destination illustration">
+            <Image
+              src="/og-v2.png"
+              alt="DayWeave postcard showing a coral thread weaving a city waterfront, green park and coastal path toward Wivi"
+              width={1536}
+              height={1024}
+              priority
+              unoptimized
+            />
           </div>
 
-          <div className="import-layout">
-            <div className="import-editor">
-              <label className="form-label" htmlFor="wishlist-input">
-                Your notes, links or booking details
+          <div className="opening-search-shell">
+            {savedJourney && (
+              <button className="continue-journey" type="button" onClick={continueSavedJourney}>
+                <span>Continue my saved day</span>
+                <small>{savedJourney.stage === "live" ? "Pick up at the next stop" : "Return to the route you already wove"} →</small>
+              </button>
+            )}
+            <form
+              className="opening-searchbar"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleExtraction();
+              }}
+            >
+              <DestinationCombobox
+                value={destination}
+                disabled={importStatus === "working"}
+                onChange={updateDestination}
+                onSubmit={() => savedPlacesInputRef.current?.focus()}
+              />
+              <label className="opening-saved-field" htmlFor="wishlist-input">
+                <span>
+                  Places you already saved
+                  <small>Optional · one per line</small>
+                </span>
                 <textarea
+                  ref={savedPlacesInputRef}
                   id="wishlist-input"
-                  className="text-area"
                   value={rawWishlist}
+                  disabled={importStatus === "working"}
+                  aria-label="Places you already saved (optional)"
+                  aria-describedby="saved-places-hint"
                   onChange={(event) => {
                     setRawWishlist(event.target.value);
                     setDemoMode(false);
+                    setRecommendationBundle(null);
                     setImportStatus("idle");
                     setImportMessage("");
+                    setVerificationAccepted(false);
                   }}
-                  placeholder={"Man Mo is non-negotiable\nPeak near sunset\nLunch booked at 12:30…"}
+                  onKeyDown={(event) => {
+                    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                      event.preventDefault();
+                      void handleExtraction();
+                    }
+                  }}
+                  placeholder={"Man Mo Temple\nStar Ferry\nVictoria Peak"}
+                  rows={2}
                 />
+                <small id="saved-places-hint">Leave blank and DayWeave will choose for you.</small>
               </label>
-              <div className="import-tools">
-                <label className="upload-tile" htmlFor="screenshot-upload">
-                  <input
-                    ref={fileRef}
-                    id="screenshot-upload"
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp,image/gif"
-                    onChange={handleScreenshot}
-                  />
-                  <strong>{uploadName || "Add a screenshot"}</strong>
-                  <small>Processed once, then discarded</small>
-                </label>
-                <button className="button button--sky button--wide" type="button" onClick={() => {
-                  setDemoMode(true);
-                  setRawWishlist(hongKongDemo.messyWishlist);
-                  setImportStatus("idle");
-                  setImportMessage("Demo notes loaded. Structure them when you’re ready.");
-                }}>
-                  Use the messy demo list
-                </button>
-              </div>
-              <p className="import-assurance">
-                <span className="import-assurance__mark" aria-hidden="true">✓</span>
-                <span><strong>Private by default.</strong> Pasted notes are matched without AI. Screenshots are discarded after each attempt and can only be read when vision is connected.</span>
-              </p>
-              {importMessage && (
-                <div className={`import-feedback import-feedback--${importStatus}`} role={importStatus === "error" ? "alert" : "status"} aria-atomic="true">
-                  <span className="import-feedback__eyebrow">
-                    {importStatus === "ready" ? "Ready to review" : importStatus === "working" ? "Reading notes" : importStatus === "error" ? "Try another way" : "Notes updated"}
-                  </span>
-                  <strong>{importStatus === "ready" ? "Your day is ready to review." : importStatus === "working" ? "Following the thread…" : importStatus === "error" ? "We couldn’t read that yet." : "Ready when you are."}</strong>
-                  <p>{importMessage}</p>
-                </div>
-              )}
-              <div className="action-row">
-                {importStatus === "ready" ? (
-                  <button className="button button--primary" type="button" onClick={() => setStage("confirm")} data-testid="confirm-intent">
-                    Confirm what matters
-                  </button>
-                ) : (
-                  <button className="button button--primary" type="button" onClick={handleExtraction} disabled={importStatus === "working"} data-testid="extract-wishlist">
-                    <span className="button-icon" aria-hidden="true">{importStatus === "working" ? "…" : "⌁"}</span>
-                    {importStatus === "working" ? "Reading your notes…" : "Read my notes"}
-                  </button>
-                )}
-                {importStatus === "error" && (
-                  <button className="button button--lime" type="button" onClick={useDemoFallback}>Open the sample day</button>
-                )}
-              </div>
-            </div>
+              <button className="opening-searchbar__submit" type="submit" disabled={importStatus === "working"} data-testid="extract-wishlist">
+                <span>{importStatus === "working" ? "Finding what matters…" : "Show me what not to miss"}</span>
+                <span aria-hidden="true">{importStatus === "working" ? "…" : "↗"}</span>
+              </button>
+            </form>
 
-            <aside className="demo-mess" aria-label="What DayWeave can understand">
-              <h2>Messy is welcome</h2>
-              <p className="messy-line">“Victoria Peak near sunset” → a window to confirm</p>
-              <p className="messy-line">“shopping last so I don’t carry bags” → a sequence wish</p>
-              <p className="messy-line">booking screenshot → a fixed time to protect</p>
-              <p className="messy-line">“absolutely cannot miss” → a must-visit suggestion, never a silent decision</p>
-              <p className="quiet-note">Local matching understands supported place names and clear wishes. Connected AI helps with screenshots and messier phrasing. Verified application logic decides what is possible.</p>
-            </aside>
+            {importMessage && (
+              <div className={`import-feedback import-feedback--${importStatus}`} role={importStatus === "error" ? "alert" : "status"} aria-atomic="true">
+                <strong>{importStatus === "working" ? "Reading your list…" : importStatus === "error" ? "DayWeave needs another source." : "Ready when you are."}</strong>
+                <p>{importMessage}</p>
+              </div>
+            )}
+            {importStatus === "error" && (
+              <button
+                className="button button--ghost opening-search-shell__fallback"
+                type="button"
+                onClick={() => void loadHongKongExample()}
+                disabled={importStatus === "working"}
+              >
+                Try the Hong Kong demo
+              </button>
+            )}
           </div>
         </div>
+
+        <div className="opening-copy">
+          <div className="opening-message">
+            <p className="eyebrow">Local insight before itinerary</p>
+            <h1 id="opening-title">See the day worth taking, and what not to miss at every stop.</h1>
+          </div>
+
+          <div className="opening-composer">
+            <p className="opening-lede">
+              Choose where you are going. Add any places you already saved in the separate field above, or leave it blank and let DayWeave choose. The service brings back one clear recommendation with the details people discover too late.
+            </p>
+            <span className="brand-promise">The recommendation comes from DayWeave. Your notes never have to become the product.</span>
+
+            <div className="opening-composer__tools">
+              <button
+                className="text-action"
+                type="button"
+                onClick={() => void loadHongKongExample()}
+                disabled={importStatus === "working"}
+                data-testid="open-hong-kong-demo"
+              >
+                {importStatus === "working" ? "Opening Hong Kong…" : "Try the Hong Kong demo"}
+              </button>
+              {extractionCapabilities?.screenshotAnalysisAvailable === true && (
+                <label className="text-action text-action--upload" htmlFor="screenshot-upload">
+                  <input ref={fileRef} id="screenshot-upload" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={handleScreenshot} />
+                  {uploadName || "Add screenshot"}
+                </label>
+              )}
+            </div>
+            <p className="opening-scope">Curated destination knowledge works offline for Hong Kong, Singapore, Seoul, Cheung Chau and Johor Bahru. Elsewhere, DayWeave checks the public travel guide and works best for a city, island or compact region with enough specific listings.</p>
+          </div>
+        </div>
+
+        <ol className="opening-journey" aria-label="How DayWeave works">
+          <li><span>01</span><strong>Name where you are going.</strong></li>
+          <li><span>02</span><strong>Get one clear recommendation.</strong></li>
+          <li><span>03</span><strong>Know what not to miss.</strong></li>
+        </ol>
       </section>
     );
   }
 
   function renderConfirm() {
+    const incompleteBookingPlaces = places.filter((place) =>
+      place.note?.includes("confirm an end time before planning"),
+    );
+    const needsAcknowledgement =
+      (confirmationPrompts.length > 0 || unresolvedItems.length > 0) &&
+      !verificationAccepted;
+    const hasBlockingVerification =
+      incompleteBookingPlaces.length > 0 ||
+      unconfirmedPriorityIds.length > 0 ||
+      needsAcknowledgement;
     return (
       <section className="screen" aria-labelledby="confirm-title">
         <div className="screen-inner">
           <div className="screen-heading heading-with-wivi">
             <div>
               <p className="step-label">2 · Protect what matters</p>
-              <h1 id="confirm-title" tabIndex={-1} ref={headingRef}>Give every place the right weight.</h1>
-              <p>Tap a charm to move it, or drag it between groups. Must-visits get a visible protection knot—not just a different color.</p>
+              <h1 id="confirm-title" tabIndex={-1} ref={headingRef}>{places.length} places in {destination}. What matters most?</h1>
+              <p>Check the order, booking times and priority. This is the only review before DayWeave builds the adaptive route.</p>
               <ProgressDots stage={stage} />
             </div>
             <Wivi mood="comforting" />
           </div>
 
-          <div className="priority-board">
-            {priorityOrder.map((priority) => {
-              const lanePlaces = places.filter((place) => place.priority === priority);
-              return (
-                <section
-                  className={`priority-lane priority-lane--${priority === "convenient" ? "optional" : priority}${dragTarget === priority ? " is-dragging-over" : ""}`}
-                  key={priority}
-                  aria-label={`${laneCopy[priority].title} priority group`}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    setDragTarget(priority);
-                  }}
-                  onDragLeave={() => setDragTarget(null)}
-                  onDrop={(event) => handleDrop(event, priority)}
-                >
-                  <div className="lane-heading">
-                    <div>
-                      <strong>{laneCopy[priority].title}</strong>
-                      <p className="quiet-note">{laneCopy[priority].description}</p>
-                    </div>
-                    <span aria-label={`${lanePlaces.length} places`}>{lanePlaces.length}</span>
-                  </div>
-                  <div className="lane-charms">
-                    {lanePlaces.map((place) => (
-                      <PlaceCharm
-                        key={place.id}
-                        place={toThreadPlace(place)}
-                        onClick={() => movePriority(place.id, nextPriority(place.priority))}
-                        onDragStart={(event) => {
-                          event.dataTransfer.effectAllowed = "move";
-                          setDraggingId(place.id);
-                        }}
-                      />
-                    ))}
-                  </div>
-                </section>
-              );
-            })}
-          </div>
-
-          <div className="trip-settings">
-            <label className="form-label">
-              Start
-              <select className="select-input" defaultValue="sheung-wan-start" aria-label="Start location">
-                <option value="sheung-wan-start">Sheung Wan MTR</option>
-              </select>
-            </label>
-            <label className="form-label">
-              End
-              <select className="select-input" defaultValue="jordan-hotel-end" aria-label="End location">
-                <option value="jordan-hotel-end">Hotel in Jordan</option>
-              </select>
-            </label>
-            <label className="form-label">
-              Comfortable walking
-              <select className="select-input" value={walkingKm} onChange={(event) => setWalkingKm(Number(event.target.value))}>
-                <option value={2.4}>Gentle · up to 2.4 km</option>
-                <option value={3.6}>Comfortable · up to 3.6 km</option>
-                <option value={5.2}>Happy to walk · up to 5.2 km</option>
-              </select>
-            </label>
-            <fieldset className="pace-control">
-              <legend className="form-label">Pace</legend>
-              <div className="pace-options">
-                {(["relaxed", "balanced", "packed"] as Pace[]).map((option) => (
-                  <button
-                    className="pace-option"
-                    type="button"
-                    aria-pressed={pace === option}
-                    onClick={() => setPace(option)}
-                    key={option}
-                  >
-                    {option[0].toUpperCase() + option.slice(1)}
-                  </button>
-                ))}
+          {(confirmationPrompts.length > 0 || unresolvedItems.length > 0 || hasBlockingVerification) && (
+            <section className={`verification-panel${incompleteBookingPlaces.length > 0 ? " verification-panel--blocking" : ""}`} aria-labelledby="verification-title">
+              <div>
+                <p className="mono-label">Please verify</p>
+                <h2 id="verification-title">No uncertain detail becomes a hidden assumption.</h2>
               </div>
-            </fieldset>
-          </div>
+              {incompleteBookingPlaces.length > 0 && (
+                <div className="verification-blocker" role="alert">
+                  <strong>A booking is not protected yet.</strong>
+                  <p>{incompleteBookingPlaces.map((place) => `${place.name}: ${place.note}`).join(" ")} Add the end time to your notes and read them again before weaving.</p>
+                  <button className="button button--ghost" type="button" onClick={() => setStage("opening")}>Fix the notes</button>
+                </div>
+              )}
+              {confirmationPrompts.length > 0 && (
+                <ul>{confirmationPrompts.map((prompt) => <li key={prompt}>{prompt}</li>)}</ul>
+              )}
+              {unresolvedItems.length > 0 && (
+                <details>
+                  <summary>{unresolvedItems.length} note {unresolvedItems.length === 1 ? "line needs" : "lines need"} a human check</summary>
+                  <ul>{unresolvedItems.map((item) => <li key={item}>{item}</li>)}</ul>
+                </details>
+              )}
+              {needsAcknowledgement && (
+                <div className="verification-actions">
+                  <button className="button button--primary" type="button" onClick={() => setVerificationAccepted(true)}>I checked these details</button>
+                  <button className="button button--ghost" type="button" onClick={() => setStage("opening")}>Edit my notes</button>
+                </div>
+              )}
+            </section>
+          )}
+
+          <section className="priority-review" aria-labelledby="priority-review-title">
+            <header>
+              <div>
+                <p className="mono-label">Your saved places</p>
+                <h2 id="priority-review-title">{places.filter((place) => place.priority === "must").length} protected · {places.length} total</h2>
+              </div>
+              <p>Change only what needs changing.</p>
+            </header>
+            <ul>
+              {places.map((place) => (
+                <li className={`priority-review__row priority-review__row--${place.priority}${unconfirmedPriorityIds.includes(place.id) ? " priority-review__row--needs-choice" : ""}`} key={place.id}>
+                  <span className="priority-review__icon" aria-hidden="true">{iconGlyphs[place.icon ?? ""] ?? "✦"}</span>
+                  <div className="priority-review__place">
+                    <strong>{place.name}</strong>
+                    <small>{place.area}</small>
+                    <div className="priority-review__facts">
+                      {unconfirmedPriorityIds.includes(place.id) && <span className="needs-choice">Needs your choice</span>}
+                      {place.fixedBooking && <span>Fixed · {formatTime(place.fixedBooking.start)}–{formatTime(place.fixedBooking.end)}</span>}
+                      {place.timingConstraints?.map((constraint) => <span key={constraint.id}>{constraint.label}</span>)}
+                      {place.shoppingLast && <span>Keep near the end</span>}
+                      {place.note && <span>{place.note}</span>}
+                    </div>
+                  </div>
+                  <label className="priority-review__control">
+                    <span>Priority</span>
+                    <select value={unconfirmedPriorityIds.includes(place.id) ? "" : place.priority} onChange={(event) => movePriority(place.id, event.target.value as Priority)} aria-label={`Priority for ${place.name}`}>
+                      <option value="" disabled>Choose priority…</option>
+                      <option value="must">Must visit</option>
+                      <option value="love">Would love</option>
+                      <option value="convenient">Only if convenient</option>
+                    </select>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <details className="plan-preferences">
+            <summary>Day preferences <span>{pace} pace · up to {walkingKm.toFixed(1)} km walking</span></summary>
+            <div className="trip-settings">
+              <div className="trip-setting-fact"><span>Start</span><strong>10:30 · Sheung Wan MTR</strong><small>Confirmed in the Hong Kong example</small></div>
+              <div className="trip-setting-fact"><span>End</span><strong>By 9:00 · Hotel in Jordan</strong><small>Confirmed in the Hong Kong example</small></div>
+              <label className="form-label">Comfortable walking<select className="select-input" value={walkingKm} onChange={(event) => setWalkingKm(Number(event.target.value))}><option value={2.4}>Gentle · up to 2.4 km</option><option value={3.6}>Comfortable · up to 3.6 km</option><option value={5.2}>Happy to walk · up to 5.2 km</option></select></label>
+              <fieldset className="pace-control"><legend className="form-label">Pace</legend><div className="pace-options">{(["relaxed", "balanced", "packed"] as Pace[]).map((option) => <button className="pace-option" type="button" aria-pressed={pace === option} onClick={() => setPace(option)} key={option}>{option[0].toUpperCase() + option.slice(1)}</button>)}</div></fieldset>
+            </div>
+          </details>
 
           <div className="action-row">
-            <button className="button button--primary" type="button" onClick={() => setStage("tangle")} data-testid="review-thread">
-              See my tangled thread
+            <button className="button button--primary" type="button" onClick={handleUntangle} data-testid="weave-day" disabled={hasBlockingVerification || isUntangling}>
+              {hasBlockingVerification ? "Choose every priority above" : isUntangling ? "Shaping your day…" : "Weave my day"}
             </button>
-            <button className="button button--ghost" type="button" onClick={() => setStage("import")}>Back to the notes</button>
+            <button className="button button--ghost" type="button" onClick={() => setStage("opening")}>Back to my list</button>
           </div>
         </div>
       </section>
     );
   }
 
-  function renderTangle() {
+  function renderRecommendation() {
+    if (!recommendationBundle) return null;
+    const destinationKey = destination.trim().toLocaleLowerCase("en");
+    const isHongKongDemo =
+      demoMode && /^(?:hong\s*kong|hongkong|hk)$/.test(destinationKey);
+    const recommendedPlaceIds = new Set(
+      recommendationBundle.orderedBriefs.map((brief) => brief.placeId),
+    );
+    const hasCanonicalHongKongArtwork =
+      recommendedPlaceIds.size === 3 &&
+      ["man-mo-temple", "star-ferry", "victoria-peak"].every(
+        (placeId) => recommendedPlaceIds.has(placeId),
+      );
+    const recommendationArtwork =
+      destinationKey === "singapore"
+        ? {
+            src: "/singapore-journey-v1.png",
+            alt: "A mosaic journey from Fort Canning through Marina Bay to East Coast Park in Singapore",
+          }
+        : /^(?:hong\s*kong|hongkong|hk)$/.test(destinationKey) &&
+            hasCanonicalHongKongArtwork
+          ? {
+              src: "/hong-kong-journey-v1.png",
+              alt: "A mosaic Hong Kong journey connecting Man Mo Temple, Star Ferry and Victoria Peak",
+            }
+          : null;
+    const stopImagePositions = ["18% center", "50% center", "84% center"];
+    const stopImageOrigins = ["left center", "center", "right center"];
+    const placesById = new Map(places.map((place) => [place.id, place]));
+    const briefsById = new Map(
+      recommendationBundle.orderedBriefs.map((brief) => [brief.placeId, brief]),
+    );
+    const dayThreads = recommendationBundle.routePlan.days.map((day) => {
+      const dayPlaces = day.stopIds
+        .map((placeId) => placesById.get(placeId))
+        .filter((place): place is Place => Boolean(place));
+      return {
+        ...day,
+        briefs: day.stopIds.flatMap((placeId) => {
+          const brief = briefsById.get(placeId);
+          return brief ? [brief] : [];
+        }),
+        routeUrl: recommendationDirectionsUrl(
+          dayPlaces,
+          day.areaLabel || destination,
+        ),
+      };
+    });
+    const isMultiDay = dayThreads.length > 1;
+    const singleDayRouteUrl = dayThreads[0]?.routeUrl;
+    const storyPositionByPlaceId = new Map<
+      string,
+      {
+        dayNumber: number;
+        areaLabel: string;
+        stopNumber: number;
+        stopCount: number;
+      }
+    >();
+    dayThreads.forEach((day) => {
+      day.stopIds.forEach((placeId, index) => {
+        storyPositionByPlaceId.set(placeId, {
+          dayNumber: day.dayNumber,
+          areaLabel: day.areaLabel,
+          stopNumber: index + 1,
+          stopCount: day.stopIds.length,
+        });
+      });
+    });
+    const routeBasisCopy =
+      recommendationBundle.routePlan.basis === "verified_locations"
+        ? "Grouped from verified venue locations and ordered by geographic proximity within each area. Maps checks live transit, closures and travel times when you open it."
+        : "This is a sourced editorial sequence, not a live fastest-route claim. Maps checks current directions and timing when you open it.";
+
     return (
-      <section className="screen" aria-labelledby="tangle-title">
-        <div className="screen-inner">
-          <p className="step-label">3 · The honest tangle</p>
-          <div className="tangle-layout">
-              <ThreadMap
-                places={tangledPlaces}
-                untangled={threadUntangled}
-                label={threadUntangled ? "Destination charms reorganized along a calmer coral route" : `${places.length} destination charms attached to a tangled coral travel thread`}
+      <section className="screen recommendation-screen" aria-labelledby="recommendation-title">
+        <header
+          className={`recommendation-visual-hero${recommendationArtwork ? " recommendation-visual-hero--with-art" : ""}`}
+        >
+          <div className="recommendation-visual-hero__media" aria-hidden={!recommendationArtwork}>
+            {recommendationArtwork ? (
+              <Image
+                src={recommendationArtwork.src}
+                alt={recommendationArtwork.alt}
+                fill
+                priority
+                unoptimized
+                sizes="100vw"
               />
-            <div className="tangle-action">
-              <Wivi mood={isUntangling ? "pulling" : "tangled"} />
-              <div className="wivi-speech">Your {places.filter((place) => place.priority === "must").length} must-visits are held safely while I check what truly fits.</div>
-              <h1 id="tangle-title" tabIndex={-1} ref={headingRef}>{isUntangling ? "Finding the calmer shape…" : "These wishes are allowed to be messy."}</h1>
-              <p>DayWeave tests the real combinations against opening windows{places.some((place) => place.fixedBooking) ? ", your fixed booking" : ""}{places.some((place) => place.timingConstraints?.length) ? ", your timing wishes" : ""}, walking comfort and travel time.</p>
-              <button className={`button button--coral untangle-button${isUntangling ? " is-working" : ""}`} type="button" onClick={handleUntangle} disabled={isUntangling} data-testid="untangle-day">
-                <span className="button-icon" aria-hidden="true">⌁</span>
-                {isUntangling ? "Untangling…" : "Untangle my day"}
-              </button>
-              <p className="quiet-note">A deterministic solver makes the final decision. Nothing is added, removed or reprioritized silently.</p>
-            </div>
+            ) : (
+              <div className="recommendation-visual-hero__fallback" aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </div>
+            )}
           </div>
-        </div>
+
+          <div className="recommendation-visual-hero__content">
+            <p className="recommendation-visual-hero__eyebrow">
+              DayWeave recommends · {destination}
+            </p>
+            <h1 id="recommendation-title" tabIndex={-1} ref={headingRef}>
+              Your {destination} essentials.
+            </h1>
+            <p className="recommendation-visual-hero__promise">
+              {recommendationBundle.headline}
+            </p>
+            <p className="recommendation-visual-hero__rationale">
+              {recommendationBundle.rationale}
+            </p>
+
+            {recommendationBundle.branchResolutions.length > 0 && (
+              <aside
+                className="recommendation-branch-decisions"
+                aria-label="How DayWeave matched branches to this route"
+              >
+                <p className="recommendation-branch-decisions__label">
+                  Branch matched to your day
+                </p>
+                <ul>
+                  {recommendationBundle.branchResolutions.map((resolution) => {
+                    const matchLabel =
+                      resolution.matchKind === "explicit"
+                        ? "Your exact branch"
+                        : resolution.matchKind === "same_complex"
+                          ? "At the same stop"
+                          : resolution.matchKind === "contextual_area"
+                            ? "Best area match"
+                            : "Destination default";
+                    return (
+                      <li key={`${resolution.intent}-${resolution.selectedPlaceId}`}>
+                        <span>{matchLabel}</span>
+                        <div>
+                          <strong>{resolution.selectedPlaceName}</strong>
+                          <p>{resolution.reason}</p>
+                          {resolution.alternative && (
+                            <small>
+                              Chosen instead of {resolution.alternative.placeName}
+                            </small>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </aside>
+            )}
+
+            {recommendationBundle.unresolvedWishlistItems.length > 0 && (
+              <section
+                className="recommendation-wishlist-followup"
+                aria-labelledby="recommendation-wishlist-followup-title"
+                data-testid="unresolved-wishlist"
+              >
+                <header>
+                  <p className="recommendation-wishlist-followup__label">
+                    Kept, never guessed
+                  </p>
+                  <h2 id="recommendation-wishlist-followup-title">
+                    {recommendationBundle.unresolvedWishlistItems.length === 1
+                      ? "One wish needs a quick check."
+                      : `${recommendationBundle.unresolvedWishlistItems.length} wishes need a quick check.`}
+                  </h2>
+                  <p>
+                    DayWeave searched the destination guides but could not
+                    verify a route-ready place with enough confidence. It stayed
+                    in your wishlist instead of becoming the wrong pin.
+                  </p>
+                </header>
+                <div>
+                  <ul>
+                    {recommendationBundle.unresolvedWishlistItems.map(
+                      (wishlistItem, index) => (
+                        <li key={`${wishlistItem}-${index}`}>
+                          <span aria-hidden="true">↳</span>
+                          <strong>{wishlistItem}</strong>
+                          <small>Kept for your review</small>
+                        </li>
+                      ),
+                    )}
+                  </ul>
+                  <button
+                    className="recommendation-wishlist-followup__action"
+                    type="button"
+                    data-testid="edit-unresolved-wishlist"
+                    onClick={() => {
+                      setStage("opening");
+                      setAnnouncement(
+                        "Your wishlist is still here. Review the item DayWeave could not verify confidently.",
+                      );
+                      window.requestAnimationFrame(() =>
+                        savedPlacesInputRef.current?.focus(),
+                      );
+                    }}
+                  >
+                    Review this wish <span aria-hidden="true">→</span>
+                  </button>
+                </div>
+              </section>
+            )}
+
+            <section
+              className="recommendation-route-plan"
+              aria-labelledby="recommendation-route-plan-title"
+            >
+              <header className="recommendation-route-plan__intro">
+                <div>
+                  <p className="recommendation-route-plan__label">
+                    {isMultiDay
+                      ? `${dayThreads.length} area-based days`
+                      : "One area-based day"}
+                  </p>
+                  <h2 id="recommendation-route-plan-title">
+                    {isMultiDay
+                      ? "A route that stays in the area."
+                      : "A clear order for the day."}
+                  </h2>
+                </div>
+                <p>{recommendationBundle.routePlan.summary}</p>
+              </header>
+
+              <div className="recommendation-route-plan__days">
+                {dayThreads.map((day) => (
+                  <article
+                    className="recommendation-day-thread"
+                    data-testid={`recommendation-day-${day.dayNumber}`}
+                    key={`${day.dayNumber}-${day.areaLabel}`}
+                  >
+                    <header>
+                      <p>
+                        Suggested day {day.dayNumber}
+                        <span aria-hidden="true"> · </span>
+                        <strong>{day.areaLabel}</strong>
+                      </p>
+                      <h3>{day.areaLabel} day</h3>
+                      <span>{day.title}</span>
+                    </header>
+                    <ol aria-label={`Stop order for day ${day.dayNumber} in ${day.areaLabel}`}>
+                      {day.briefs.map((brief, index) => (
+                        <li key={brief.placeId}>
+                          <span>{String(index + 1).padStart(2, "0")}</span>
+                          <strong>{brief.placeName}</strong>
+                        </li>
+                      ))}
+                    </ol>
+                    <footer>
+                      <p>{day.rationale}</p>
+                      {isMultiDay && (
+                        <a
+                          href={day.routeUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          data-testid={`recommendation-day-route-${day.dayNumber}`}
+                          aria-label={`Open ${day.areaLabel} day in Maps (opens in a new tab)`}
+                        >
+                          Open {day.areaLabel} day in Maps ↗
+                        </a>
+                      )}
+                    </footer>
+                  </article>
+                ))}
+              </div>
+
+              <p className="recommendation-route-plan__basis">
+                <span aria-hidden="true">◎</span>
+                {routeBasisCopy}
+              </p>
+            </section>
+
+            <div className="recommendation-visual-hero__actions">
+              {isHongKongDemo ? (
+                <>
+                  <button
+                    className="button button--primary"
+                    type="button"
+                    onClick={openAdaptiveHongKongDemo}
+                    data-testid="continue-hong-kong-demo"
+                  >
+                    Continue to the full adaptive day →
+                  </button>
+                  {!isMultiDay && singleDayRouteUrl && (
+                    <a
+                      className="button button--ghost"
+                      href={singleDayRouteUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open these essentials in Maps ↗
+                    </a>
+                  )}
+                </>
+              ) : (
+                <>
+                  {!isMultiDay && singleDayRouteUrl && (
+                    <a
+                      className="button button--primary"
+                      href={singleDayRouteUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Use this recommendation in Maps ↗
+                    </a>
+                  )}
+                  <button
+                    className="button button--ghost"
+                    type="button"
+                    onClick={() => setStage("opening")}
+                  >
+                    Try another destination
+                  </button>
+                </>
+              )}
+            </div>
+            {isHongKongDemo && (
+              <p className="recommendation-demo-next">
+                Next: a seven-stop day with lunch, sunset and the moments that
+                matter protected when plans change.
+              </p>
+            )}
+          </div>
+        </header>
+
+        <section
+          className="recommendation-stories"
+          aria-labelledby="recommendation-stories-title"
+        >
+          <header className="recommendation-stories__intro">
+            <p className="mono-label">
+              {recommendationBundle.orderedBriefs.length} sourced stops ·{" "}
+              {dayThreads.length} {dayThreads.length === 1 ? "day thread" : "day threads"}
+            </p>
+            <h2 id="recommendation-stories-title">
+              {isMultiDay
+                ? "What not to miss, day by day."
+                : "What not to miss, stop by stop."}
+            </h2>
+            <p>
+              DayWeave keeps the area and order visible, then gives you the detail
+              that makes each stop count.
+            </p>
+          </header>
+
+          <ol className="recommendation-stories__list">
+            {recommendationBundle.orderedBriefs.map((brief, index) => {
+              const evidence = brief.evidence[0];
+              const storyPosition = storyPositionByPlaceId.get(brief.placeId);
+              const momentLabel = storyPosition
+                ? `Day ${storyPosition.dayNumber} · ${storyPosition.areaLabel}`
+                : `Stop ${index + 1}`;
+              const stopPosition = storyPosition
+                ? `stop ${storyPosition.stopNumber} of ${storyPosition.stopCount}`
+                : `stop ${brief.order}`;
+              return (
+                <li
+                  className={index % 2 === 1 ? "recommendation-story recommendation-story--reverse" : "recommendation-story"}
+                  key={brief.placeId}
+                >
+                  <figure className="recommendation-story__visual" aria-hidden="true">
+                    {recommendationArtwork ? (
+                      <Image
+                        src={recommendationArtwork.src}
+                        alt=""
+                        fill
+                        unoptimized
+                        sizes="(max-width: 980px) 100vw, 46vw"
+                        style={{
+                          objectPosition: stopImagePositions[index] ?? "center",
+                          transformOrigin: stopImageOrigins[index] ?? "center",
+                        }}
+                      />
+                    ) : (
+                      <div className="recommendation-story__fallback">
+                        <span>{String(brief.order).padStart(2, "0")}</span>
+                      </div>
+                    )}
+                    <figcaption>
+                      {momentLabel} · {stopPosition}
+                    </figcaption>
+                  </figure>
+
+                  <article className="recommendation-story__content">
+                    <header>
+                      <div>
+                        <p className="mono-label">
+                          {momentLabel} · {stopPosition} ·{" "}
+                          {brief.origin === "saved"
+                            ? "one you saved"
+                            : "picked by DayWeave"}
+                        </p>
+                        <h3>{brief.placeName}</h3>
+                      </div>
+                      <a
+                        href={placeSearchUrl(
+                          brief.placeName,
+                          brief.mapsArea ?? destination,
+                        )}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label={`Find ${brief.placeName} in Maps (opens in a new tab)`}
+                      >
+                        Maps ↗
+                      </a>
+                    </header>
+
+                    <section
+                      className="recommendation-story__dont-miss"
+                      aria-label={`Don’t miss at ${brief.placeName}`}
+                    >
+                      <span>Don’t miss here</span>
+                      <strong>{brief.dontMiss}</strong>
+                    </section>
+
+                    <div className="recommendation-story__why">
+                      <span>Why it earns the stop</span>
+                      <p>{brief.whyPeopleCome}</p>
+                    </div>
+
+                    <footer>
+                      <p><strong>Worth knowing:</strong> {brief.worthKnowing}</p>
+                      <a href={evidence.sourceUrl} target="_blank" rel="noreferrer">
+                        {evidence.sourceName} · checked {evidence.lastCheckedDate}
+                        {evidence.license ? ` · ${evidence.license}` : ""} ↗
+                      </a>
+                    </footer>
+                  </article>
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+
+        <details className="recommendation-provenance">
+          <summary>
+            <span>How DayWeave chose these places</span>
+            <span aria-hidden="true">+</span>
+          </summary>
+          <div className="recommendation-provenance__content">
+            <div>
+              <p className="mono-label">Independent destination evidence</p>
+              <h2>
+                {recommendationBundle.mode === "curated_local"
+                  ? "Local insight stays separate from what you typed."
+                  : "Travel-guide knowledge, adapted with attribution."}
+              </h2>
+              <p>
+                Nothing was copied from your notes and called a recommendation.
+                Each “Don’t miss” detail has an independent source. Maps remains
+                responsible for current directions, travel times and venue status.
+              </p>
+            </div>
+            <a
+              className="button button--sky"
+              href={recommendationBundle.attribution.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open the source ↗
+            </a>
+          </div>
+          {recommendationBundle.attribution.license && (
+            <p className="recommendation-provenance__license">
+              Adapted from {recommendationBundle.attribution.label} under{" "}
+              {recommendationBundle.attribution.license}.
+            </p>
+          )}
+        </details>
       </section>
     );
   }
@@ -1047,10 +1901,10 @@ export default function DayWeaveApp() {
 
     if (!plan.feasible) {
       return (
-        <section className="screen" aria-labelledby="result-title">
+        <section className="screen result-screen" aria-labelledby="result-title">
           <div className="screen-inner">
             <div className="screen-heading">
-              <p className="step-label">4 · A truthful result</p>
+              <p className="step-label">3 · Your route</p>
               <h1 id="result-title" tabIndex={-1} ref={headingRef}>This set needs a little more room.</h1>
               <p>DayWeave will not pretend everything fits. Adjust one priority or walking limit, and the protected places will be checked again.</p>
             </div>
@@ -1063,26 +1917,38 @@ export default function DayWeaveApp() {
     }
 
     return (
-      <section className="screen" aria-labelledby="result-title">
+      <section className="screen result-screen" aria-labelledby="result-title">
         <div className="screen-inner">
           <div className="screen-heading heading-with-wivi">
             <div>
-              <p className="step-label">4 · Your actionable day</p>
-              <h1 id="result-title" tabIndex={-1} ref={headingRef}>Your Hong Kong day, in one clear order.</h1>
-              <p>Every stop, travel cue and protected moment is together below. Start when you’re ready; DayWeave will adapt only the part still ahead.</p>
+              <p className="step-label">3 · Your route</p>
+              <h1 id="result-title" tabIndex={-1} ref={headingRef}>A day you can follow, with the moments protected.</h1>
+              <p>{plan.metrics.selectedCount} places fit without rushing. The route tells you what comes next and why its timing matters.</p>
               <ProgressDots stage={stage} />
             </div>
             <Wivi mood="happy" />
           </div>
 
-          <section className="day-plan" aria-labelledby="day-plan-title">
+          <section className="day-plan route-story" aria-labelledby="day-plan-title">
             <header className="day-plan__header">
               <div>
-                <p className="mono-label">Saturday · {formatTimelineTime(dayStartMinute)}–{formatTimelineTime(plan.metrics.finishMinute)}</p>
-                <h2 id="day-plan-title">{plan.metrics.selectedCount} stops, with room to breathe.</h2>
-                <p>{plan.metrics.selectedCount} of {plan.metrics.totalPlaceCount} chosen places fit.</p>
+                <p className="mono-label">{demoMode ? "Saturday sample" : "Prototype day"} · {formatTimelineTime(dayStartMinute)}–{formatTimelineTime(plan.metrics.finishMinute)}</p>
+                <h2 id="day-plan-title">Your day, woven in order.</h2>
+                <p>Each stop keeps the essential cue close: when to move, what makes it worth the stop and what DayWeave is protecting.</p>
               </div>
             </header>
+
+            <ul className="route-story__facts" aria-label="Route summary">
+              <li><span>In the day</span><strong>{plan.metrics.selectedCount} stops</strong></li>
+              <li><span>Must-visits safe</span><strong>{plan.metrics.mustVisitProtectedCount}</strong></li>
+              <li><span>Walking</span><strong>{plan.metrics.walkingKm.toFixed(1)} km</strong></li>
+              <li><span>Back by</span><strong>{formatTimelineTime(plan.metrics.finishMinute)}</strong></li>
+            </ul>
+
+            <div className="day-plan__actions day-plan__commit">
+              <button className="button button--primary" type="button" onClick={beginDay} data-testid="begin-day">{demoMode ? "Try the live journey" : "Follow this route"}</button>
+              <button className="button button--ghost" type="button" onClick={() => setStage("confirm")}>Adjust my choices</button>
+            </div>
 
             <RouteTimeline
               stops={plan.itinerary}
@@ -1092,12 +1958,12 @@ export default function DayWeaveApp() {
               endLabel="Hotel in Jordan"
               endLocationId={optimizationInput.day.endLocationId}
               finishMinute={plan.metrics.finishMinute}
+              directionsRegion={destination}
+              showConstraintReasons
+              showDirectionsLinks
+              insightsByPlaceId={dontMissByPlaceId}
+              variant="editorial"
             />
-
-            <div className="day-plan__actions day-plan__commit">
-              <button className="button button--primary" type="button" onClick={beginDay} data-testid="begin-day">Begin my day</button>
-              <button className="button button--ghost" type="button" onClick={() => setStage("confirm")}>Adjust my choices</button>
-            </div>
 
             {plan.deferred.length > 0 && (
               <footer className="day-plan__deferred">
@@ -1108,7 +1974,8 @@ export default function DayWeaveApp() {
           </section>
 
           <details className="plan-secondary">
-            <summary>Why this route works</summary>
+            <summary>How DayWeave decided</summary>
+            <p className="decision-proof">OpenAI interprets messy travel intent when connected. AURORA verifies the real constraints. You approve every meaningful change.</p>
             <ul className="metric-list" aria-label="Optimization improvements">
               <li><span className="metric-icon">+{returnedMinutes}</span><span><strong>{returnedMinutes} minutes returned to your day</strong><small>Compared with the tangled saved order</small></span></li>
               <li><span className="metric-icon">{plan.metrics.walkingKm.toFixed(1)}</span><span><strong>Walking reduced from {baseline.walkingKm.toFixed(1)} to {plan.metrics.walkingKm.toFixed(1)} km</strong><small>Inside your selected comfort</small></span></li>
@@ -1121,39 +1988,7 @@ export default function DayWeaveApp() {
             </ul>
           </details>
 
-          <details className="plan-secondary plan-secondary--discovery">
-            <summary>
-              <span>Optional nearby idea</span>
-              <strong>{UPPER_LASCAR_ROW_SUGGESTION.title}</strong>
-            </summary>
-            <aside className="discovery-card" aria-labelledby="discovery-title">
-              <div>
-                <p className="mono-label">Only if you want one more possibility</p>
-                <h2 id="discovery-title">{UPPER_LASCAR_ROW_SUGGESTION.title}</h2>
-                <p>{UPPER_LASCAR_ROW_SUGGESTION.whyRelevant}</p>
-                <div className="discovery-meta">
-                  <span className="micro-tag">Local classic</span>
-                  <span className="micro-tag">30 min</span>
-                  <span className="micro-tag">Route changes only after approval</span>
-                </div>
-                {discoveryMessage ? (
-                  <div className="change-summary"><strong>Your choice is saved</strong><p>{discoveryMessage}</p></div>
-                ) : (
-                  <div className="discovery-actions">
-                    <button className="button button--primary" type="button" onClick={() => decideDiscovery("added")}>Add to my day</button>
-                    <button className="button button--ghost" type="button" onClick={() => decideDiscovery("saved")}>Save for later</button>
-                    <button className="button button--ghost" type="button" onClick={() => decideDiscovery("declined")}>No thanks</button>
-                    <details className="evidence-details">
-                      <summary>Why this?</summary>
-                      <div className="evidence-body">A 100+ year antiques street near your morning cluster. Official tourism source, checked {UPPER_LASCAR_ROW_SUGGESTION.evidence[0].lastCheckedDate}. It cannot affect scheduling until you approve it.</div>
-                    </details>
-                  </div>
-                )}
-              </div>
-            </aside>
-          </details>
-
-          <p className="screen-footer-note">Place hours and travel estimates come from the verified Hong Kong prototype catalog; your pasted notes stay separate. DayWeave is a decision companion, not a replacement for turn-by-turn maps.</p>
+          <p className="screen-footer-note">Place hours and travel estimates come from the verified Hong Kong prototype catalog; your pasted notes stay separate. This confirmed day is saved in this browser so a refresh does not erase it. DayWeave is a decision companion, not a replacement for turn-by-turn maps.</p>
         </div>
       </section>
     );
@@ -1199,20 +2034,12 @@ export default function DayWeaveApp() {
       );
     }
 
-    const alternative = plannedStops.find(
-      (stop) => !completedIds.includes(stop.placeId) && stop.placeId !== currentStop?.placeId,
-    );
-    return (
-      <motion.section className="choice-sheet" role="region" aria-labelledby="another-title" initial={reduceMotion ? false : { opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduceMotion ? 0 : 0.18 }}>
-        <h2 id="another-title">Another gentle option</h2>
-        <p>{alternative ? `${alternative.name} could come next, but it would add about 18 minutes and reduce your breathing room before sunset.` : "There is no equally safe alternative right now. The current suggestion protects the moments you chose."}</p>
-        <button ref={sheetRef} className="button button--sky" type="button" onClick={closeSupportSheet}>Keep the calmer route</button>
-      </motion.section>
-    );
+    return null;
   }
 
   function renderLive() {
     if (!plan || !livePlan) return null;
+    const livePlaces = liveState?.sourceInput.places ?? places;
     const firstLiveLeg = livePlan.legs[0];
     const nextLeg = currentStop
       ? firstLiveLeg?.toId === currentStop.placeId
@@ -1231,54 +2058,179 @@ export default function DayWeaveApp() {
     const hasCurrentBrief =
       currentStop?.placeId === "maks-noodle" ||
       currentStop?.placeId === "bakehouse-soho";
+    const currentPlaceRecord = livePlaces.find(
+      (place) => place.id === currentStop?.placeId,
+    );
+    const currentOrigin =
+      liveState?.completedStops.at(-1)?.name ??
+      (destination ? `${destination} starting point` : "Starting point");
+    const currentInsight = currentStop
+      ? dontMissByPlaceId[
+          currentStop.placeId as keyof typeof dontMissByPlaceId
+        ]
+      : undefined;
+    const currentStopNumber = completedIds.length + 1;
+    const laterStopCount = Math.max(0, plannedStops.length - 1);
+    const upcomingStops = plannedStops.slice(1, 3);
+    const destinationKey = destination.trim().toLocaleLowerCase("en");
+    const liveArtwork =
+      /^(?:hong\s*kong|hongkong|hk)$/.test(destinationKey)
+        ? {
+            src: "/hong-kong-journey-v1.png",
+            alt: "A mosaic Hong Kong journey with Man Mo Temple, Victoria Harbour and Victoria Peak",
+          }
+        : destinationKey === "singapore"
+          ? {
+              src: "/singapore-journey-v1.png",
+              alt: "A mosaic Singapore journey from Fort Canning through Marina Bay to East Coast Park",
+            }
+          : {
+              src: "/og-v2.png",
+              alt: `A DayWeave journey through ${destination || "the day"}`,
+            };
+    const liveArtworkPositions: Record<string, string> = {
+      "man-mo-temple": "8% center",
+      "bakehouse-soho": "25% center",
+      "maks-noodle": "37% center",
+      "tai-kwun": "46% center",
+      pmq: "54% center",
+      "victoria-peak": "87% center",
+      "temple-street-market": "70% center",
+    };
+    const liveArtworkPosition =
+      (currentStop && liveArtworkPositions[currentStop.placeId]) ?? "center";
+    const startLabel = destination
+      ? `${destination} starting point`
+      : "Starting point";
+    const endLabel = destination
+      ? `${destination} finish`
+      : "End point";
 
     return (
-      <section className="screen" aria-labelledby="live-title">
+      <section className="screen live-screen" aria-labelledby="live-title">
         <div className="live-shell">
           <div className="live-main">
-            <div className="live-topline">
-              <p className="step-label">Live day · {currentStop ? `stop ${completedIds.length + 1} of ${routeStops.length}` : "route complete"}</p>
-              <span className="live-time">{formatTime(nowMinute)} · Hong Kong</span>
+            <div className="live-journey-status">
+              <div>
+                <p className="step-label">{demoMode ? "Guided demo" : "Live route"}</p>
+                <strong>{currentStop ? `Stop ${currentStopNumber} of ${routeStops.length}` : "Route complete"}</strong>
+              </div>
+              <div className="live-journey-clock">
+                <span>{demoMode ? "Demo time" : "Plan time"}</span>
+                <strong>{formatTime(nowMinute)}</strong>
+                <small>{destination || "Hong Kong"}</small>
+              </div>
             </div>
 
             {currentStop ? (
-              <article className="next-card">
-                <p className="next-kicker">{arrived ? "You are here" : travelActive ? "On the thread" : "Your next gentle decision"}</p>
-                <h1 id="live-title" tabIndex={-1} ref={headingRef}>
-                  {arrived ? `Enjoy ${currentStop.name}.` : travelActive ? `Head toward ${currentStop.name}.` : `Go to ${currentStop.name} next.`}
-                </h1>
-                <div className="next-timing">
-                  <span aria-hidden="true">◷</span>
-                  {arrived
-                    ? `Stay until around ${formatTimelineTime(currentStop.endMinute)}`
-                    : nextLeg
-                      ? `Depart ${formatTimelineTime(nextLeg.departMinute)} · ${nextLeg.minutes} min ${travelModeLabel(nextLeg.mode).toLocaleLowerCase("en")} · arrive ${formatTimelineTime(nextLeg.arriveMinute)} · visit until ${formatTimelineTime(currentStop.endMinute)}`
-                      : `Visit ${formatTimelineTime(currentStop.startMinute)}–${formatTimelineTime(currentStop.endMinute)} · travel estimate unavailable`}
-                </div>
-                <p className="decision-why">{recoveryApplied ? "This keeps every remaining booking and protected timing window valid after the delay." : "This follows the route below and keeps every confirmed booking and timing window valid."}</p>
-                {liveNotice && <div className="wivi-speech">{liveNotice}</div>}
-                <div className="next-actions">
-                  {arrived ? (
-                    <>
-                      <button className="button button--primary" type="button" onClick={completeCurrentStop} data-testid="complete-stop">Tie this moment</button>
-                      {hasCurrentBrief && <button className="button button--sun" type="button" onClick={() => setStage("briefing")}>Don’t miss here</button>}
-                    </>
-                  ) : (
-                    <button className="button button--primary" type="button" onClick={takeMeThere} data-testid="take-me-there">
-                      <span className="button-icon" aria-hidden="true">→</span>
-                      {travelActive ? "I’ve arrived" : "Take me there"}
-                    </button>
+              <article className="live-journey-focus">
+                <figure className="live-journey-focus__visual">
+                  <Image
+                    src={liveArtwork.src}
+                    alt={liveArtwork.alt}
+                    fill
+                    priority
+                    unoptimized
+                    sizes="(max-width: 980px) 100vw, 46vw"
+                    style={{ objectPosition: liveArtworkPosition }}
+                  />
+                  <figcaption>
+                    <span>Now</span>
+                    <strong>{currentStop.name}</strong>
+                  </figcaption>
+                </figure>
+
+                <div className="live-journey-focus__content">
+                  <header className="live-journey-focus__heading">
+                    <div>
+                      <p className="next-kicker">{arrived ? "You are here" : travelActive ? "On your way" : "Up next"}</p>
+                      <h1 id="live-title" tabIndex={-1} ref={headingRef}>
+                        {arrived ? `Be here at ${currentStop.name}.` : travelActive ? `Head toward ${currentStop.name}.` : currentStop.name}
+                      </h1>
+                    </div>
+                    <span aria-hidden="true">{String(currentStopNumber).padStart(2, "0")}</span>
+                  </header>
+
+                  <dl className="live-journey-timing" aria-label={`Timing for ${currentStop.name}`}>
+                    {arrived ? (
+                      <div>
+                        <dt>Stay until</dt>
+                        <dd>{formatTimelineTime(currentStop.endMinute)}</dd>
+                      </div>
+                    ) : nextLeg ? (
+                      <>
+                        <div>
+                          <dt>Leave</dt>
+                          <dd>{formatTimelineTime(nextLeg.departMinute)}</dd>
+                        </div>
+                        <div>
+                          <dt>Travel</dt>
+                          <dd>{nextLeg.minutes} min {travelModeLabel(nextLeg.mode).toLocaleLowerCase("en")}</dd>
+                        </div>
+                        <div>
+                          <dt>Arrive</dt>
+                          <dd>{formatTimelineTime(nextLeg.arriveMinute)}</dd>
+                        </div>
+                      </>
+                    ) : (
+                      <div>
+                        <dt>Visit</dt>
+                        <dd>{formatTimelineTime(currentStop.startMinute)}–{formatTimelineTime(currentStop.endMinute)}</dd>
+                      </div>
+                    )}
+                  </dl>
+
+                  <div className="live-journey-actions">
+                    {arrived ? (
+                      <>
+                        <button className="button button--primary" type="button" onClick={completeCurrentStop} data-testid="complete-stop">Done with this stop</button>
+                        <button className="button button--ghost" type="button" onClick={() => setSupportSheet("stay")}>Stay a little longer</button>
+                      </>
+                    ) : (
+                      <>
+                        <button className="button button--primary" type="button" onClick={takeMeThere} data-testid="take-me-there">
+                          <span className="button-icon" aria-hidden="true">→</span>
+                          {travelActive ? "I’ve arrived" : "Start this leg"}
+                        </button>
+                        <a
+                          className="button button--ghost"
+                          href={directionsUrl(currentStop.name, currentPlaceRecord?.area, currentOrigin, destination)}
+                          target="_blank"
+                          rel="noreferrer"
+                          aria-label={`Open directions to ${currentStop.name} in Google Maps (opens in a new tab)`}
+                        >
+                          Open in Maps ↗
+                        </a>
+                      </>
+                    )}
+                    {isAfterFirstStop && !recoveryApplied && (
+                      <button className="live-journey-actions__quiet" type="button" onClick={openRepair} data-testid="simulate-delay">Running late?</button>
+                    )}
+                  </div>
+
+                  {currentInsight && (
+                    <aside className="live-journey-insight" aria-label={`Don’t miss at ${currentStop.name}`}>
+                      <span>Don’t miss here</span>
+                      <strong>{currentInsight.summary}</strong>
+                      {hasCurrentBrief && (
+                        <button
+                          className="live-journey-insight__action"
+                          type="button"
+                          onClick={() => openBriefing(currentStop.placeId as "maks-noodle" | "bakehouse-soho", "live")}
+                          data-testid={recoveryApplied ? "view-briefing" : undefined}
+                        >
+                          See the local insight →
+                        </button>
+                      )}
+                    </aside>
                   )}
-                  {isAfterFirstStop && !recoveryApplied && (
-                    <button className="button button--lavender" type="button" onClick={openRepair} data-testid="simulate-delay">I’m running 40 minutes late</button>
-                  )}
-                  {recoveryApplied && !arrived && hasCurrentBrief && (
-                    <button className="button button--sun" type="button" onClick={() => setStage("briefing")} data-testid="view-briefing">View Don’t Miss Here</button>
-                  )}
+
+                  <p className="live-journey-reassurance">{recoveryApplied ? "The rest of the route has already shifted around your delay. Protected moments remain safe." : "Only this move needs your attention. The rest of the day waits quietly below."}</p>
+                  {liveNotice && <div className="live-journey-notice">{liveNotice}</div>}
                 </div>
               </article>
             ) : (
-              <article className="next-card">
+              <article className="live-journey-complete">
                 <p className="next-kicker">The day has been lived</p>
                 <h1 id="live-title" tabIndex={-1} ref={headingRef}>Let’s tie the memory thread.</h1>
                 <p className="decision-why">A meaningful day does not need a completion score. Keep the moments, not the checklist.</p>
@@ -1286,53 +2238,14 @@ export default function DayWeaveApp() {
               </article>
             )}
 
-            <section className="live-route" aria-labelledby="live-route-title">
-              <header className="live-route__header">
-                <div>
-                  <p className="mono-label">Done · now · later</p>
-                  <h2 id="live-route-title">Today’s route, in one place.</h2>
-                </div>
-                <span>Back by {formatTimelineTime(livePlan.metrics.finishMinute)}</span>
-              </header>
-              <RouteTimeline
-                stops={routeStops}
-                legs={livePlan.legs}
-                places={liveState?.sourceInput.places ?? places}
-                startLabel="Sheung Wan MTR"
-                endLabel="Hotel in Jordan"
-                endLocationId={liveState?.sourceInput.day.endLocationId ?? optimizationInput.day.endLocationId}
-                finishMinute={livePlan.metrics.finishMinute}
-                completedIds={completedIds}
-                currentPlaceId={currentStop?.placeId}
-                currentStateLabel={arrived ? "You’re here" : travelActive ? "On the way" : "Up next"}
-                breaks={liveState?.protectedBreaks ?? []}
-                label="Live route with completed, current and upcoming stops"
-              />
-            </section>
-
-            {(recoveryApplied || breakMinutes || stayMinutes) && (
-              <details className="live-changes">
-                <summary>What changed in my route</summary>
-                <div>
-                  {recoveryApplied && (
-                    <div className="change-summary">
-                      <strong>{recoveryChoice === "protect_moments" ? "The moments are protected" : "Every chosen stop is kept"}</strong>
-                      <p>{recoveryChoice === "protect_moments" ? `${recoveryDeferred?.name ?? "One lower-priority stop"} is saved for another day. Your fixed booking and protected timing windows remain safe.` : `You chose tighter transition buffers. The route still finishes by ${formatTimelineTime(selectedRecovery?.state.currentPlan.metrics.finishMinute ?? livePlan.metrics.finishMinute)}.`}</p>
-                    </div>
-                  )}
-                  {breakMinutes && <div className="change-summary"><strong>Rest is protected</strong><p>Your {breakMinutes}-minute break is part of the plan, not leftover time.</p></div>}
-                  {stayMinutes && <div className="change-summary"><strong>You chose the moment</strong><p>{stayMinutes} extra minutes were honored. Only the remaining day was re-woven.</p></div>}
-                </div>
-              </details>
-            )}
-
             {currentStop && (
-              <div className="support-tools">
+              <section className="live-journey-support" aria-label="Change the remaining day">
                 <button
                   ref={supportTriggerRef}
                   className="change-day-trigger"
                   type="button"
                   aria-expanded={supportMenuOpen}
+                  aria-controls="day-change-options"
                   onClick={() => {
                     setSupportMenuOpen((open) => !open);
                     setSupportSheet(null);
@@ -1353,12 +2266,6 @@ export default function DayWeaveApp() {
                       exit={{ opacity: 0, y: -6 }}
                       transition={{ duration: reduceMotion ? 0 : 0.16 }}
                     >
-                      {arrived && (
-                        <button className="support-action support-action--love" type="button" onClick={() => {
-                          setSupportMenuOpen(false);
-                          setSupportSheet("stay");
-                        }}><span aria-hidden="true">♡</span><span>I’m loving it here</span></button>
-                      )}
                       {(!isAfterFirstStop || recoveryApplied) && (
                         <button className="support-action" type="button" onClick={openRepair}><span aria-hidden="true">+40</span><span>I’m running late</span></button>
                       )}
@@ -1370,20 +2277,89 @@ export default function DayWeaveApp() {
                         setSupportMenuOpen(false);
                         setSupportSheet("skip");
                       }}><span aria-hidden="true">↷</span><span>Skip this</span></button>
-                      <button className="support-action" type="button" onClick={() => {
-                        setSupportMenuOpen(false);
-                        setSupportSheet("alternative");
-                      }}><span aria-hidden="true">⇄</span><span>Another option</span></button>
+                      <button className="support-action" type="button" onClick={confirmEndDay}><span aria-hidden="true">✓</span><span>End my day here</span></button>
                     </motion.div>
                   )}
                 </AnimatePresence>
-              </div>
+              </section>
             )}
 
             <AnimatePresence>{renderSupportSheet()}</AnimatePresence>
-            {recoveryApplied && stayMinutes && (
-              <button className="button button--primary button--wide" type="button" onClick={finishDay} data-testid="finish-day">Finish the demo day</button>
+
+            {(recoveryApplied || breakMinutes || stayMinutes) && (
+              <details className="live-changes">
+                <summary>What changed in my route</summary>
+                <div>
+                  {recoveryApplied && (
+                    <div className="change-summary">
+                      <strong>{recoveryChoice === "protect_moments" ? "The moments are protected" : "Every chosen stop is kept"}</strong>
+                      <p>{recoveryChoice === "protect_moments" ? `${recoveryDeferred?.name ?? "One lower-priority stop"} is saved for another day. Your fixed booking and protected timing windows remain safe.` : `You chose tighter transition buffers. The route still finishes by ${formatTimelineTime(selectedRecovery?.state.currentPlan.metrics.finishMinute ?? livePlan.metrics.finishMinute)}.`}</p>
+                    </div>
+                  )}
+                  {breakMinutes && <div className="change-summary"><strong>Rest is protected</strong><p>Your {breakMinutes}-minute break is part of the plan, not leftover time.</p></div>}
+                  {stayMinutes && <div className="change-summary"><strong>You chose the moment</strong><p>{stayMinutes} extra minutes were honored. Only the remaining day was re-woven.</p></div>}
+                </div>
+              </details>
             )}
+
+            <section className="live-journey-upcoming" aria-labelledby="live-route-title">
+              <header className="live-journey-upcoming__header">
+                <div>
+                  <p className="mono-label">Coming up</p>
+                  <h2 id="live-route-title">What comes next.</h2>
+                  <p>{completedIds.length > 0 ? `${completedIds.length} ${completedIds.length === 1 ? "moment is" : "moments are"} already tied. ` : ""}{laterStopCount} {laterStopCount === 1 ? "stop remains" : "stops remain"} after this one.</p>
+                </div>
+                <span><small>Back by</small><strong>{formatTimelineTime(livePlan.metrics.finishMinute)}</strong></span>
+              </header>
+
+              {upcomingStops.length > 0 ? (
+                <ol className="live-journey-glance" aria-label="Next stops at a glance">
+                  {upcomingStops.map((stop, index) => {
+                    const place = livePlaces.find((item) => item.id === stop.placeId);
+                    return (
+                      <li key={stop.placeId}>
+                        <span>{String(currentStopNumber + index + 1).padStart(2, "0")}</span>
+                        <div>
+                          <strong>{stop.name}</strong>
+                          <small>{place?.area ?? destination}</small>
+                        </div>
+                        <time>{formatTimelineTime(stop.startMinute)}</time>
+                      </li>
+                    );
+                  })}
+                </ol>
+              ) : (
+                <p className="live-journey-upcoming__last">This is the final stop in today’s thread.</p>
+              )}
+
+              {laterStopCount > 0 && (
+                <details className="live-journey-route-details">
+                  <summary>
+                    See the full remaining route
+                    <span>{laterStopCount} {laterStopCount === 1 ? "stop" : "stops"}</span>
+                  </summary>
+                  <RouteTimeline
+                    stops={routeStops}
+                    legs={livePlan.legs}
+                    places={livePlaces}
+                    startLabel={startLabel}
+                    endLabel={endLabel}
+                    endLocationId={liveState?.sourceInput.day.endLocationId ?? optimizationInput.day.endLocationId}
+                    finishMinute={livePlan.metrics.finishMinute}
+                    directionsRegion={destination}
+                    completedIds={completedIds}
+                    currentPlaceId={currentStop?.placeId}
+                    currentStateLabel={arrived ? "You’re here" : travelActive ? "On the way" : "Up next"}
+                    breaks={liveState?.protectedBreaks ?? []}
+                    label="Live route with completed, current and upcoming stops"
+                    showConstraintReasons
+                    variant="live"
+                  />
+                </details>
+              )}
+            </section>
+
+            {recoveryApplied && stayMinutes && <button className="button button--primary button--wide" type="button" onClick={finishDay} data-testid="finish-day">See today’s memory</button>}
           </div>
         </div>
       </section>
@@ -1402,8 +2378,18 @@ export default function DayWeaveApp() {
         !completedIds.includes(stop.placeId) &&
         !protectOption?.state.currentPlan.itinerary.some(
           (nextStop) => nextStop.placeId === stop.placeId,
-        ),
+      ),
     ) ?? [];
+    const protectedPlan = protectOption?.state.currentPlan;
+    const protectedFixedStop = protectedPlan?.itinerary.find((stop) => stop.fixedBooking);
+    const protectedFixedPlace = places.find((place) => place.id === protectedFixedStop?.placeId);
+    const protectedTimedStop = protectedPlan?.itinerary.find((stop) =>
+      places.some((place) => place.id === stop.placeId && place.timingConstraints?.length),
+    );
+    const protectedTimedPlace = places.find((place) => place.id === protectedTimedStop?.placeId);
+    const completedMomentCopy = completedIds.length > 0
+      ? `${completedIds.length === 1 ? "Your completed moment stays" : `${completedIds.length} completed moments stay`} exactly where ${completedIds.length === 1 ? "it belongs" : "they belong"}.`
+      : "Nothing in the original plan changes until you choose a path.";
 
     return (
       <section className="screen" aria-labelledby="repair-title">
@@ -1411,7 +2397,7 @@ export default function DayWeaveApp() {
           <div className="screen-heading">
             <p className="step-label">The day changed · you stay in control</p>
             <h1 id="repair-title" tabIndex={-1} ref={headingRef}>Forty minutes later. Two honest paths.</h1>
-            <p>At {formatTime(pendingDelayState?.currentMinute ?? nowMinute)}, only the remaining day was recalculated. Your completed moment stays exactly where it belongs.</p>
+            <p>At {formatTime(pendingDelayState?.currentMinute ?? nowMinute)}, only the remaining day was recalculated. {completedMomentCopy}</p>
           </div>
           <div className="repair-intro">
             <Wivi mood="comforting" small />
@@ -1423,8 +2409,12 @@ export default function DayWeaveApp() {
               <h2>{protectOption?.title ?? "Protect the moments"}</h2>
               <p>{protectOption?.description ?? "Keep the emotional anchors and create breathing room."}</p>
               <ul className="tradeoff-list">
-                <li>Keep Victoria Peak inside the sunset window</li>
-                <li>Keep the 12:30 lunch reservation</li>
+                <li>{protectedTimedPlace
+                  ? `Keep ${protectedTimedPlace.name} ${protectedTimedPlace.timingConstraints?.[0]?.window.label?.toLocaleLowerCase("en") ?? "inside its protected timing window"}`
+                  : "Keep every confirmed timing window valid"}</li>
+                <li>{protectedFixedPlace
+                  ? `Keep ${protectedFixedPlace?.fixedBooking?.label.toLocaleLowerCase("en") ?? "the fixed booking"} at ${formatTime(protectedFixedPlace?.fixedBooking?.start ?? protectedFixedStop?.startMinute ?? 0)}`
+                  : "Keep every confirmed booking fixed"}</li>
                 <li>{newlyDeferred.length > 0 ? `Save ${newlyDeferred.map((stop) => stop.name).join(", ")} for another day` : "No newly deferred stops"}</li>
                 <li>Finish by {formatTime(protectOption?.state.currentPlan.metrics.finishMinute ?? 20 * 60 + 35)}</li>
               </ul>
@@ -1454,9 +2444,18 @@ export default function DayWeaveApp() {
   }
 
   function renderBriefing() {
-    const brief = currentStop?.placeId === "maks-noodle"
+    const brief = briefingPlaceId === "maks-noodle"
       ? MAKS_NOODLE_DONT_MISS_HERE
       : BAKEHOUSE_DONT_MISS_HERE;
+    const signatureConfidence = brief.dontMiss.claim.confidence;
+    const confidenceLabel = signatureConfidence === "high"
+      ? "High confidence"
+      : signatureConfidence === "medium"
+        ? "Moderate confidence"
+        : "Emerging signal";
+    const sourceLabel = brief.dontMiss.claim.sourceType === "official_venue"
+      ? "Official venue source"
+      : "Official tourism source";
     return (
       <section className="screen" aria-labelledby="brief-title">
         <div className="screen-inner">
@@ -1464,7 +2463,7 @@ export default function DayWeaveApp() {
             <div>
               <p className="step-label">Not a walkthrough · the thing people discover too late</p>
               <h1 id="brief-title" tabIndex={-1} ref={headingRef}>Don’t Miss Here</h1>
-              <p>A concise, evidence-aware briefing for {brief.placeName}. Popularity and cultural significance are kept distinct.</p>
+              <p>The one detail that helps {brief.placeName} feel like more than another pin on a map.</p>
             </div>
             <Wivi mood="pointing" />
           </div>
@@ -1474,7 +2473,7 @@ export default function DayWeaveApp() {
                 <p className="mono-label">Up next · {brief.placeName}</p>
                 <h2>{brief.placeName}</h2>
               </header>
-              {[brief.whyPeopleCome, brief.dontMiss, brief.worthKnowing].map((section) => (
+              {[brief.dontMiss, brief.whyPeopleCome, brief.worthKnowing].map((section) => (
                 <section className="brief-section" key={section.heading}>
                   <h3>{section.heading}</h3>
                   <p>{section.body}</p>
@@ -1484,9 +2483,8 @@ export default function DayWeaveApp() {
             </article>
             <aside className="briefing-aside">
               <div className="confidence-card">
-                <strong>Confidence · evidence-aware</strong>
-                <p>Official sources support the heritage and signature choice. No unverified queue or sell-out timing is allowed to move your day.</p>
-                <div className="confidence-bar" aria-label="Strong evidence for the main experience claim"><i className="is-filled" /><i className="is-filled" /><i className="is-filled" /><i className="is-filled" /><i /></div>
+                <strong>{confidenceLabel} · checked {brief.dontMiss.claim.lastCheckedDate}</strong>
+                <p>{sourceLabel} supports this signature choice. Visitor context can enrich the stop, but it never moves your route on its own.</p>
               </div>
               <details className="evidence-details">
                 <summary>View evidence</summary>
@@ -1497,14 +2495,10 @@ export default function DayWeaveApp() {
                   <a href={brief.whyPeopleCome.claim.sourceUrl} target="_blank" rel="noreferrer" aria-label="Context evidence (opens in a new tab)">Context evidence ↗</a>
                 </div>
               </details>
-              <div className="notice"><span aria-hidden="true">✓</span><span><strong>No timing claim applied.</strong><br />This insight enriches the visit, but cannot move the route without verified timing evidence.</span></div>
-              <button className="button button--primary button--wide" type="button" onClick={() => {
-                setStage("live");
-                setArrived(true);
-                setTravelActive(false);
-                setNowMinute(currentStop?.startMinute ?? nowMinute);
-                setLiveNotice(`You’re here. ${brief.dontMiss.body}`);
-              }} data-testid="arrive-from-brief">Take me there</button>
+              <div className="notice"><span aria-hidden="true">✓</span><span><strong>Insight, not a scheduling fact.</strong><br />It helps you experience the stop; only verified timing evidence can change the route.</span></div>
+              <button className="button button--primary button--wide" type="button" onClick={() => setStage(briefingOrigin)} data-testid="arrive-from-brief">
+                {briefingOrigin === "result" ? "Back to the day plan" : "Back to my current stop"}
+              </button>
             </aside>
           </div>
         </div>
@@ -1531,10 +2525,10 @@ export default function DayWeaveApp() {
               <div className="wivi-speech">This is what the trip is for. Let’s reshape the rest of your afternoon.</div>
               <h1 id="reweave-title" tabIndex={-1} ref={headingRef}>Enjoying a place longer is not a mistake.</h1>
               <p>{stayMinutes} extra minutes are now honored. Completed stops remain fixed and the solver checked every remaining window again.</p>
-              <div className="change-summary"><strong>What changed</strong><p>{deferredChange?.message ?? `${movedCount} remaining ${movedCount === 1 ? "time was" : "times were"} recalculated. No destination was added, and the protected sunset remains valid.`}</p></div>
+              <div className="change-summary"><strong>What changed</strong><p>{deferredChange?.message ?? `${movedCount} remaining ${movedCount === 1 ? "time was" : "times were"} recalculated. No destination was added, and every remaining protected timing stays valid.`}</p></div>
               <button className="button button--coral untangle-button" type="button" onClick={() => {
                 setStage("live");
-                setLiveNotice("Rewoven. Your sunset is safe, and this moment got the time it deserved.");
+                setLiveNotice("Rewoven. Your protected moments are still safe, and this stop got the time it deserved.");
               }} data-testid="reweave-day"><span className="button-icon" aria-hidden="true">⌁</span>Reweave the rest</button>
             </div>
           </div>
@@ -1544,35 +2538,38 @@ export default function DayWeaveApp() {
   }
 
   function renderMemory() {
-    const memoryStops = routeStops.slice(0, 5);
+    const memoryStops = liveState?.completedStops ?? [];
     const returnedMinutes = plan ? Math.max(0, baseline.travelMinutes - plan.metrics.travelMinutes) : 0;
+    const dayComplete = (liveState?.currentPlan.itinerary.length ?? 0) === 0;
+    const rememberedMaks = memoryStops.some((stop) => stop.placeId === "maks-noodle");
+    const deferredCount = livePlan?.deferred.length ?? plan?.deferred.length ?? 0;
     return (
       <section className="screen memory-screen" aria-labelledby="memory-title">
         <div className="screen-inner">
           <div className="memory-intro">
             <div>
               <p className="step-label">Your memory thread</p>
-              <h1 id="memory-title" tabIndex={-1} ref={headingRef}>A day worth remembering.</h1>
-              <p>You protected what mattered, let the day change and stayed longer when a place deserved it. Nothing here is a score.</p>
+              <h1 id="memory-title" tabIndex={-1} ref={headingRef}>{dayComplete ? "A day worth remembering." : "Your thread so far."}</h1>
+              <p>{dayComplete ? "The day is complete, but this is not a completion score. These are only the moments you actually tied." : "Only places you marked complete appear here. The rest of the route is still waiting, without pressure."}</p>
             </div>
             <Wivi mood="knotting" />
           </div>
           <div className="memory-thread" aria-label="Cheerful journey of enjoyed places">
-            {memoryStops.map((stop, index) => {
+            {memoryStops.length > 0 ? memoryStops.map((stop, index) => {
               const place = places.find((item) => item.id === stop.placeId);
               return <div className="memory-stop" key={stop.placeId}><span aria-hidden="true">{iconGlyphs[place?.icon ?? ""] ?? "✦"}</span><strong>{stop.name}</strong><small>{index === 0 ? "first memory" : "knot tied"}</small></div>;
-            })}
+            }) : <p className="memory-empty">No moment has been tied yet. That is honest, not a failure.</p>}
           </div>
           <div className="memory-moments">
-            <div className="memory-moment"><strong>{plan?.metrics.mustVisitProtectedCount ?? 3} moments protected</strong><p>Must-visits held without turning the day into a checklist.</p></div>
+            <div className="memory-moment"><strong>{memoryStops.length} {memoryStops.length === 1 ? "moment" : "moments"} tied</strong><p>Only places you explicitly completed become memories.</p></div>
             <div className="memory-moment"><strong>{returnedMinutes} min returned</strong><p>Less backtracking, more room to actually be there.</p></div>
-            <div className="memory-moment"><strong>Shrimp wonton noodles</strong><p>A signature detail remembered from Mak’s—not another task to complete.</p></div>
-            <div className="memory-moment"><strong>{livePlan?.deferred.length ?? plan?.deferred.length ?? 2} waiting for tomorrow</strong><p>Lovely places kept with kindness, not framed as loss.</p></div>
+            {rememberedMaks && <div className="memory-moment"><strong>Shrimp wonton noodles</strong><p>A signature detail remembered from Mak’s, not another task to complete.</p></div>}
+            <div className="memory-moment"><strong>{deferredCount} waiting for another day</strong><p>Lovely places kept with kindness, not framed as loss.</p></div>
           </div>
-          <div className="wivi-speech">You did not complete a list. You made space for a day that mattered.</div>
+          <div className="wivi-speech">{dayComplete ? "You did not complete a list. You made space for a day that mattered." : "The thread remembers what happened, never what the plan merely hoped for."}</div>
           <div className="action-row">
-            <button className="button button--primary" type="button" onClick={resetApp}>Weave another day</button>
-            <button className="button button--sky" type="button" onClick={() => setStage("live")}>Return to live day</button>
+            <button className="button button--primary" type="button" onClick={exploreAnotherPlace}>Weave another day</button>
+            {!dayComplete && <button className="button button--sky" type="button" onClick={() => setStage("live")}>Return to my route</button>}
           </div>
         </div>
       </section>
@@ -1582,9 +2579,8 @@ export default function DayWeaveApp() {
   function renderStage() {
     switch (stage) {
       case "opening": return renderOpening();
-      case "import": return renderImport();
       case "confirm": return renderConfirm();
-      case "tangle": return renderTangle();
+      case "recommendation": return renderRecommendation();
       case "result": return renderResult();
       case "live": return renderLive();
       case "repair": return renderRepair();
@@ -1595,7 +2591,7 @@ export default function DayWeaveApp() {
   }
 
   return (
-    <div className="dayweave-app">
+    <div className={`dayweave-app dayweave-app--${stage}`}>
       <a className="skip-link" href="#dayweave-main">Skip to DayWeave</a>
       {renderHeader()}
       <main className="app-main" id="dayweave-main">

@@ -34,7 +34,7 @@ export function PlaceCharm({
   compact?: boolean;
   completed?: boolean;
   onClick?: () => void;
-  onDragStart?: (event: DragEvent<HTMLButtonElement>) => void;
+  onDragStart?: (event: DragEvent<HTMLElement>) => void;
 }) {
   const priorityLabel =
     place.priority === "must"
@@ -58,6 +58,20 @@ export function PlaceCharm({
 
   if (!onClick && !onDragStart) {
     return <span className={className} aria-hidden="true">{content}</span>;
+  }
+
+  if (!onClick && onDragStart) {
+    return (
+      <div
+        className={`${className} place-charm--draggable`}
+        draggable
+        onDragStart={onDragStart}
+        role="img"
+        aria-label={`${place.name}. ${priorityLabel}${place.fixed ? ". Fixed booking" : ""}. Drag to another priority group or use the priority menu below.`}
+      >
+        {content}
+      </div>
+    );
   }
 
   return (

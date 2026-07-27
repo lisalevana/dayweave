@@ -232,7 +232,7 @@ export function buildRecoveryChoices(state: LiveDayState): RecoveryChoice[] {
     id: "protect_moments",
     title: "Protect the moments",
     description:
-      "Keep the reservation and sunset safe, with a calm finish near the original time.",
+      "Keep must-visits, bookings and timing wishes safe, with a calm finish near the original time.",
     valid: protectedState.currentPlan.feasible,
     state: protectedState,
     changes: [],

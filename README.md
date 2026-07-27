@@ -2,13 +2,15 @@
 
 **Make time for what matters.**
 
-DayWeave is a calm, mobile-first wishlist maximizer for one meaningful day in
-Hong Kong. A traveller brings the places they already care about; DayWeave
-works out what can honestly fit, protects the important moments, and offers one
-clear next decision when the day changes. It is not a generic itinerary
-generator, travel chatbot, checklist game, or replacement for a maps app.
+DayWeave recommends the day worth taking and makes the point of every stop
+clear. Name a destination, optionally share places already saved, and the
+service returns one sourced thread with **Why people come**, **Don't miss**,
+and **Worth knowing** guidance. The Hong Kong example adds bundled route data
+and adaptive live-day replanning. DayWeave is not a notes organizer, generic
+checklist generator, or replacement for a maps app.
 
-> You chose the places. We make the most important ones fit.
+> Your time is precious, but it should never feel rushed. DayWeave protects the
+> moments you saved for.
 
 The consumer product is **DayWeave**. Its underlying planning system is
 **AURORA: Adaptive User-led Route Optimization & Recommendation Assistant**.
@@ -26,11 +28,17 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open the local URL printed in the terminal. An OpenAI key is optional: pasted
-notes are matched locally against the supported Hong Kong catalog, while **Try
-the Hong Kong demo** provides the complete scripted journey without remote AI
-or routing services. A key adds screenshot reading and support for messier
-phrasing.
+Open the local URL printed in the terminal. An OpenAI key is optional.
+Hong Kong, Singapore, Seoul, Cheung Chau, and Johor Bahru recommendations are curated
+into the service and work without a model provider. The destination combobox
+searches countries worldwide and also accepts any city, island, or region.
+Other destinations use the no-key Wikivoyage knowledge adapter when enough
+specific sourced listings are available. Broad country guides may need a more
+specific city or region. **Try the Hong Kong demo** opens sourced local insight
+first, then continues directly into the full adaptive journey without remote AI
+or routing services. A key adds screenshot reading and support for messier Hong
+Kong phrasing. The screenshot action stays hidden unless that capability is
+actually available.
 
 ### Environment
 
@@ -51,52 +59,63 @@ result.
 
 For the full scripted version, see [docs/HACKATHON_DEMO.md](docs/HACKATHON_DEMO.md).
 
-1. Choose **Try the Hong Kong demo** and import the messy sample wishlist.
-2. Confirm the nine destination charms: three must-visits, a fixed reservation,
-   Victoria Peak near sunset, shopping last, and optional places.
-3. Press **Untangle my day**. The deterministic result states what fits, what is
-   protected, and what is calmly saved for another day.
-4. Begin the live day, complete the first stop, then apply the one-tap 40-minute
-   delay.
-5. Compare the two valid repairs and choose **Protect the moments**.
-6. Open **Don’t Miss Here**, then choose **I’m loving it here** and stay longer.
-   AURORA replans only the unvisited remainder and never shames the change.
+1. Choose **Try the Hong Kong demo**. DayWeave first reveals the three essential
+   stops, why they matter, and what not to miss.
+2. Choose **Continue to the full adaptive day**. The deterministic planner opens
+   the truthful 7-of-9 route with lunch and sunset protected.
+3. Read the route. Each row includes its departure cue,
+   directions from the prior stop, and a place-specific **Don’t miss here** cue.
+4. Choose **Try the live journey**. **Start this leg**, **I’ve arrived**, and **Done
+   with this stop** make the simulation state explicit.
+5. After completing the first stop, choose **I’m running 40 minutes late**,
+   compare the two valid repairs, and approve the trade-off you prefer.
+6. Choose **Stay a little longer** and add time. AURORA replans only the
+   unvisited remainder and never shames the change.
 
 The intended emotional result is not “I completed everything.” It is “the time
 I spent was protected, and I was free to enjoy it.”
 
-## Screenshots
+For another destination, choose a country or type a city, island, or region.
+Pasting saved places is optional. When at least three trustworthy local
+listings are available, DayWeave brings back three service-owned
+recommendations, labels which places came from the traveller, shows an
+independently sourced **Don't miss** detail for every stop, and then hands the
+suggested sequence to Maps for current directions. Traveller notes never
+become recommendation evidence.
 
-| Opening postcard | Truthful optimization |
-| --- | --- |
-| ![DayWeave desktop opening](screenshots/dayweave-desktop-opening.png) | ![DayWeave desktop 7-of-9 result](screenshots/dayweave-desktop-result.png) |
+## Product preview
 
-| Live recovery | Evidence briefing | Memory thread |
-| --- | --- | --- |
-| ![DayWeave mobile recovery choices](screenshots/dayweave-mobile-repair.png) | ![DayWeave mobile Don't Miss Here briefing](screenshots/dayweave-mobile-briefing.png) | ![DayWeave mobile memory thread](screenshots/dayweave-mobile-memory.png) |
+![DayWeave postcard weaving a city, park and coast into one calm route](public/og-v2.png)
+
+The running product is the source of truth for the latest interface. The sample
+uses the same three-step flow as a pasted list and produces an actionable
+itinerary with constraint reasons, local insight, directions links, explicit
+recovery choices, and a memory thread made only from stops the traveller
+actually completed.
 
 ## Architecture and adapter boundaries
 
 DayWeave keeps interpretation, verification, and consent separate:
 
 ```text
-messy text ──► local catalog reader ──┐
+destination ──► curated knowledge ──┐
+                                    ├──► sourced day recommendation
+saved places, optional ─────────────┘          │
+                                               └──► Maps handoff
+
+Hong Kong notes ──► local catalog reader ──┐
 screenshot / messier phrasing ──► optional AI reader
-                                     │
-                                     ▼
-                         validated structured intent ──► traveller confirms
-                                                              │
-seeded or verified routing/place/evidence adapters ────────────┤
-                                                              ▼
-                                      deterministic optimizer (AURORA)
-                                                              │
-                                                              ▼
-                                      plan + metrics + reason codes
-                                                              │
-                           live event + chosen recovery ────────┘
+                                           │
+                                           ▼
+                               validated structured intent ──► traveller confirms
+                                                                    │
+verified routing/place/evidence adapters ────────────────────────────┤
+                                                                    ▼
+                                            deterministic optimizer (AURORA)
 ```
 
-- `app/dayweave-app.tsx` contains the staged client journey; `app/thread-map.tsx`
+- `app/dayweave-app.tsx` contains the three-step client journey and live route;
+  `app/thread-map.tsx`
   renders the accessible charm/thread visualization, and `app/wivi.tsx` renders
   Wivi, DayWeave’s pixel travel-thread spirit.
 - `lib/dayweave/` contains domain types, deterministic optimization, and
@@ -104,8 +123,10 @@ seeded or verified routing/place/evidence adapters ─────────�
   input, locally generated walk/transit matrix, tangled order, 40-minute delay,
   experience brief, and discovery fixture.
 - `lib/adapters/` holds the local/AI extraction and curated-evidence boundaries;
-  `lib/schemas/` validates both with Zod. `app/api/extract/route.ts` is the
-  no-store server endpoint for optional GPT-5.6 extraction.
+  `lib/adapters/day-recommendations.server.ts` supplies curated and Wikivoyage
+  destination knowledge. `lib/schemas/` validates every boundary with Zod.
+  `app/api/recommendations/route.ts` is the no-store recommendation endpoint;
+  `app/api/extract/route.ts` remains the optional GPT-5.6 extraction endpoint.
 - `tests/` covers deterministic invariants and the rendered/core journey.
 - `worker/` and `vite.config.ts` provide the vinext/Cloudflare runtime boundary.
 
@@ -116,7 +137,8 @@ The adapter seams are intentional:
 | Intent extraction | Turn text/screenshots into structured, confirmable intent | Matches supported pasted text locally; the scripted demo remains distinct |
 | Place resolution | Resolve aliases to stable place records | Uses the Hong Kong fixture IDs |
 | Routing | Supply verified walk/transit options and distances | Uses a bundled travel-time matrix |
-| Experience evidence | Return permitted, dated claims with provenance | Uses manually curated seeded claims |
+| Experience evidence | Return permitted, dated claims with provenance | Uses curated destination claims and attributed Wikivoyage listings |
+| Day recommendation | Choose a clear, sourced thread and show what not to miss | Uses bundled Hong Kong, Singapore, Seoul, Cheung Chau, and Johor Bahru knowledge |
 | Optimization | Produce a feasible plan and structured reason codes | Runs the same local deterministic engine |
 
 The extraction boundary is concrete: `GET /api/extract` reports both local-text
@@ -125,8 +147,7 @@ and live screenshot availability, while `POST /api/extract` accepts validated
 handles supported pasted notes with no network call. `OpenAiExtractionAdapter`
 handles optional live server-side requests; `SeededHongKongExtractionAdapter`
 supplies the explicit scripted fixture. `CuratedHongKongEvidenceAdapter`
-supplies the offline Mak’s Noodle and Bakehouse briefs plus the opt-in Upper
-Lascar Row suggestion.
+supplies the offline Mak’s Noodle and Bakehouse evidence briefs.
 
 For up to 10 places, `optimizeDay` in `lib/dayweave/optimizer.ts` runs an exact,
 deterministic prize-collecting subset/permutation search with Pareto and branch
@@ -168,11 +189,13 @@ installed, the seeded Hong Kong path runs against bundled fixtures. It is not a
 claim that arbitrary cities can be resolved offline or that this prototype is
 an installable PWA.
 
-When live AI is absent or temporarily unavailable, pasted text falls back to
-the deterministic local reader. Screenshot-only input asks for pasted text
-rather than pretending the image was read. The seeded demo remains a separate,
-clearly labelled option. A route repair changes only the remaining day;
-completed stops stay fixed, and no discovery enters the plan without approval.
+When live AI is absent or temporarily unavailable, destination recommendations
+still work through the curated knowledge service and the no-key Wikivoyage
+adapter. Supported Hong Kong notes receive the richer local catalog
+interpretation. Screenshot-only input asks for pasted text rather than
+pretending the image was read. The seeded demo remains a separate, clearly
+labelled option. A route repair changes only the remaining day and completed
+stops stay fixed.
 
 ## Privacy
 
@@ -182,6 +205,10 @@ retained after processing. The live adapter calls the Responses API with
 `store: false`; `/api/extract` sends `Cache-Control: no-store`, and provider
 errors never echo user material. Local text matching does not send the notes to
 an AI provider, and the seeded demo does not upload a screenshot at all.
+After confirmation, the structured itinerary and live progress are saved in
+this browser so a refresh cannot erase the day. The local snapshot does not
+include the raw pasted note or screenshot, and **Explore another place** clears
+that transient input while keeping the confirmed day available to resume.
 Production deployments must preserve this no-retention
 contract and avoid request-body logging. The current hosting configuration does
 not declare a D1 or R2 binding.
@@ -213,8 +240,8 @@ The experience uses semantic controls, keyboard navigation, visible focus
 states, high-contrast deep-teal ink, and at least 44px touch targets. Priority
 is conveyed by words, icons, and protected-knot shapes rather than color alone.
 The thread has a screen-reader description, decorative pixel art is hidden or
-labelled appropriately, and `prefers-reduced-motion` removes the untangle and
-ambient movement without blocking interaction.
+labelled appropriately, and `prefers-reduced-motion` removes ambient and
+reweaving movement without blocking interaction.
 
 ## Verification commands
 
@@ -235,7 +262,12 @@ new machine, install its browser runtime first with `npx playwright install`.
 
 ## MVP limits
 
-This prototype plans one Hong Kong day for 3–10 places using seeded walking and
-public-transport estimates. Worldwide place coverage, live traffic guarantees,
-background navigation, and automatic addition of recommendations are
-intentionally out of scope.
+This prototype provides complete curated recommendations for Hong Kong,
+Singapore, Seoul, Cheung Chau, and Johor Bahru, with a no-key Wikivoyage fallback for
+destinations whose guide exposes enough specific sourced listings. The full
+deterministic optimizer currently uses bundled Hong Kong walking and
+public-transport data. The worldwide country picker is a discovery aid, not a
+claim of complete coverage for every country. Worldwide venue-hour
+verification, live traffic guarantees, and background navigation remain out of
+scope. A service recommendation is always labelled, sourced, and accepted only
+when the traveller opens the suggested route.

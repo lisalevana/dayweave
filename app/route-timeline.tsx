@@ -7,7 +7,45 @@ import type {
 } from "@/lib/dayweave/types";
 import { formatTime } from "@/lib/dayweave/time";
 
-type TimelineStop = PlannedStop & { actualEndMinute?: number };
+export type TimelineStop = PlannedStop & { actualEndMinute?: number };
+
+export interface RouteStopInsight {
+  /** Short category shown above the insight, such as "Don't miss here". */
+  label?: string;
+  /** The useful, place-specific detail to surface in the itinerary. */
+  summary: string;
+  /** Short tap target copy. Defaults to "See why". */
+  actionLabel?: string;
+}
+
+export interface RouteTimelineProps {
+  stops: readonly TimelineStop[];
+  legs: readonly PlannedLeg[];
+  places: readonly Place[];
+  startLabel: string;
+  endLabel: string;
+  endLocationId: string;
+  finishMinute: number;
+  completedIds?: readonly string[];
+  currentPlaceId?: string;
+  currentStateLabel?: string;
+  breaks?: readonly ProtectedBreak[];
+  label?: string;
+  /** Place-indexed insights. Only supplied stops receive an inline callout. */
+  insightsByPlaceId?: Readonly<
+    Record<string, RouteStopInsight | undefined>
+  >;
+  /** Called when the traveller taps an inline insight. */
+  onInsightSelect?: (placeId: string) => void;
+  /** Shows a short explanation for fixed, timed, and shopping-last stops. */
+  showConstraintReasons?: boolean;
+  /** Adds Google Maps directions for each destination. */
+  showDirectionsLinks?: boolean;
+  /** Appended to destination searches to disambiguate place names. */
+  directionsRegion?: string;
+  /** Changes only the visual density; ordered-list semantics stay intact. */
+  variant?: "detailed" | "editorial" | "live";
+}
 
 export function travelModeLabel(mode: TravelMode) {
   if (mode === "walk") return "Walk";
@@ -17,6 +55,46 @@ export function travelModeLabel(mode: TravelMode) {
 
 export function formatTimelineTime(minute: number) {
   return `${formatTime(minute)}${minute >= 24 * 60 ? " · next day" : ""}`;
+}
+
+function constraintReason(place: Place | undefined) {
+  if (!place) return null;
+
+  const reasons: string[] = [];
+  if (place.fixedBooking) {
+    reasons.push(
+      `${place.fixedBooking.label.toLocaleLowerCase("en")} held at ${formatTimelineTime(place.fixedBooking.start)}`,
+    );
+  }
+  for (const constraint of place.timingConstraints ?? []) {
+    reasons.push(`${constraint.label} protected`);
+  }
+  if (place.shoppingLast) {
+    reasons.push("shopping kept last so bags do not follow you all day");
+  }
+
+  return reasons.length > 0 ? `Why this time: ${reasons.join("; ")}.` : null;
+}
+
+function googleMapsDirectionsUrl(
+  stop: TimelineStop,
+  place: Place | undefined,
+  mode: TravelMode | undefined,
+  originLabel: string,
+  region: string,
+) {
+  const destination = [stop.name, place?.area, region]
+    .filter(Boolean)
+    .join(", ");
+  const travelmode =
+    mode === "walk" ? "walking" : mode === "transit" ? "transit" : "driving";
+  const params = new URLSearchParams({
+    api: "1",
+    origin: [originLabel, region].filter(Boolean).join(", "),
+    destination,
+    travelmode,
+  });
+  return `https://www.google.com/maps/dir/?${params.toString()}`;
 }
 
 function timeValue(minute: number) {
@@ -39,20 +117,13 @@ export function RouteTimeline({
   currentStateLabel = "Up next",
   breaks = [],
   label = "Planned day in chronological order",
-}: {
-  stops: readonly TimelineStop[];
-  legs: readonly PlannedLeg[];
-  places: readonly Place[];
-  startLabel: string;
-  endLabel: string;
-  endLocationId: string;
-  finishMinute: number;
-  completedIds?: readonly string[];
-  currentPlaceId?: string;
-  currentStateLabel?: string;
-  breaks?: readonly ProtectedBreak[];
-  label?: string;
-}) {
+  insightsByPlaceId = {},
+  onInsightSelect,
+  showConstraintReasons = false,
+  showDirectionsLinks = false,
+  directionsRegion = "",
+  variant = "detailed",
+}: RouteTimelineProps) {
   const placesById = new Map(places.map((place) => [place.id, place]));
   const completed = new Set(completedIds);
   const timelineItems = [
@@ -68,11 +139,23 @@ export function RouteTimeline({
       item,
     })),
   ].sort((a, b) => a.startMinute - b.startMinute);
+  const visibleTimelineItems =
+    variant === "live"
+      ? timelineItems.filter(
+          (item) =>
+            item.kind === "break" ||
+            (!completed.has(item.stop.placeId) &&
+              item.stop.placeId !== currentPlaceId),
+        )
+      : timelineItems;
   const returnLeg = legs.find((leg) => leg.toId === endLocationId);
 
   return (
-    <ol className="itinerary-list" aria-label={label}>
-      {timelineItems.map((item) => {
+    <ol
+      className={`itinerary-list itinerary-list--${variant}`}
+      aria-label={label}
+    >
+      {visibleTimelineItems.map((item) => {
         if (item.kind === "break") {
           return (
             <li className="itinerary-row itinerary-row--break" key={item.item.id}>
@@ -103,6 +186,13 @@ export function RouteTimeline({
         const isCurrent = currentPlaceId === stop.placeId;
         const endMinute = stop.actualEndMinute ?? stop.endMinute;
         const timingLabels = place?.timingConstraints?.map((constraint) => constraint.label) ?? [];
+        const insight = insightsByPlaceId[stop.placeId];
+        const whyThisTime = showConstraintReasons
+          ? constraintReason(place)
+          : null;
+        const directionsUrl = showDirectionsLinks
+          ? googleMapsDirectionsUrl(stop, place, inboundLeg?.mode, previousLabel, directionsRegion)
+          : null;
 
         return (
           <li
@@ -133,12 +223,60 @@ export function RouteTimeline({
               {stop.waitMinutes > 0 && !isComplete && (
                 <p>{stop.waitMinutes} minutes of breathing room before the visit begins.</p>
               )}
+              {whyThisTime && (
+                <p className="itinerary-constraint-reason">{whyThisTime}</p>
+              )}
+              {insight && (
+                onInsightSelect ? (
+                  <button
+                    className="itinerary-insight"
+                    type="button"
+                    onClick={() => onInsightSelect(stop.placeId)}
+                    aria-label={`${insight.actionLabel ?? "See why"} for ${stop.name}: ${insight.summary}`}
+                  >
+                    <span className="itinerary-insight-label">
+                      {insight.label ?? "Don't miss here"}
+                    </span>
+                    <strong className="itinerary-insight-summary">
+                      {insight.summary}
+                    </strong>
+                    <span className="itinerary-insight-action" aria-hidden="true">
+                      {insight.actionLabel ?? "See why"} →
+                    </span>
+                  </button>
+                ) : (
+                  <aside
+                    className="itinerary-insight"
+                    aria-label={`${insight.label ?? "Don't miss here"} at ${stop.name}`}
+                  >
+                    <span className="itinerary-insight-label">
+                      {insight.label ?? "Don't miss here"}
+                    </span>
+                    <strong className="itinerary-insight-summary">
+                      {insight.summary}
+                    </strong>
+                  </aside>
+                )
+              )}
               <div className="itinerary-labels">
                 {place?.priority === "must" && <span>Must-visit</span>}
                 {stop.fixedBooking && <span>{place?.fixedBooking?.label ?? "Fixed booking"}</span>}
                 {timingLabels.map((timingLabel) => <span key={timingLabel}>{timingLabel}</span>)}
                 {place?.shoppingLast && <span>Shopping last</span>}
                 {isCurrent && <span>{currentStateLabel}</span>}
+                {directionsUrl && (
+                  <span className="itinerary-directions">
+                    <a
+                      className="itinerary-directions-link"
+                      href={directionsUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={`Directions to ${stop.name} in Google Maps (opens in a new tab)`}
+                    >
+                      Directions ↗
+                    </a>
+                  </span>
+                )}
               </div>
             </div>
           </li>

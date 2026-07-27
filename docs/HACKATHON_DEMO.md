@@ -1,139 +1,115 @@
-# DayWeave: three-minute judge demo
+# DayWeave: two-minute judge demo
 
-DayWeave is the consumer product. **AURORA — Adaptive User-led Route
-Optimization & Recommendation Assistant — is the planning system underneath
-it.** Keep that distinction consistent throughout the pitch.
+DayWeave is the consumer product. AURORA, the Adaptive User-led Route
+Optimization & Recommendation Assistant, is the verified planning system
+underneath it.
 
 ## Before the clock starts
 
-- Run `npm install`, then `npm run dev`, and open the URL printed in the
-  terminal.
-- Leave `OPENAI_API_KEY` blank for the most reliable demo. The seeded path is a
-  deliberate offline adapter, not a recording or a disguised live result.
-- Use a 390 × 844 mobile viewport for the core story; keep a 1440 × 900 tab
-  ready if judges ask about responsive design.
-- Reload to reset. Confirm the opening screen shows **Try the Hong Kong demo**.
-- Do not call AURORA “the app” and do not claim that GPT calculated the route.
+- Run `npm install`, then `npm run dev`, and open the local URL.
+- If a server-side `OPENAI_API_KEY` is available, screenshot reading can be
+  shown. Never place the key in a public or client-side variable.
+- If live vision is unavailable, choose **Try the Hong Kong demo**. Its local
+  insight and adaptive planner are deterministic, not a prerecorded result.
+- Keep the app at a comfortable mobile or desktop width.
+- Do not claim GPT calculates routes, travel times, or feasibility.
 
 ## Timed script
 
-### 0:00–0:20 — The problem and promise
+### 0:00 to 0:25 | One job, understood immediately
 
-**Action:** Show the opening postcard, the coral thread, and Wivi.
+**Show:** The opening composer and the three steps: name, recommend, reveal.
 
-**Say:** “People save for years for one day like this, then lose precious time
-backtracking through a wishlist. DayWeave doesn’t invent another itinerary. It
-starts with the places you already chose and makes time for what matters —
-without turning the day into a checklist.”
+**Say:** “DayWeave recommends the day worth taking and tells me what not to
+miss at every stop. My input can shape the result, but the insight comes from
+the service, not from my own note repeated back.”
 
-**Action:** Choose **Try the Hong Kong demo**.
+**Choose:** **Try the Hong Kong demo**.
 
-### 0:20–0:45 — Messy wishes become confirmable intent
+### 0:25 to 0:50 | Protect the point of the trip
 
-**Action:** Show the preloaded messy sample, choose **Structure my wishes**, then
-choose **Confirm what matters** when extraction finishes.
+**Show:** The visual Hong Kong recommendation, its three-stop thread, and the
+source-backed detail not to miss at Man Mo Temple, Star Ferry, and Victoria
+Peak.
 
-**Say:** “This looks like real trip planning: mixed notes, links, a reservation,
-‘Victoria Peak near sunset,’ and ‘shopping last so I don’t carry bags.’ With a
-key, GPT-5.6 turns screenshots and text into structured intent. This demo uses
-the same schema through a bundled offline adapter, so I’m not pretending a
-seeded result is live AI.”
+**Say:** “DayWeave gives me the local point of every stop before it gives me a
+schedule. Now I can continue into a full day where lunch and sunset are
+protected.”
 
-### 0:45–1:05 — The traveller stays in control
+**Choose:** **Continue to the full adaptive day**.
 
-**Action:** Point to the nine charms, the three non-color **Must visit** markers,
-the fixed booking, pace, and walking comfort. If useful, tap one charm to show
-that the priorities are editable.
+### 0:50 to 1:15 | One actionable, truthful route
 
-**Say:** “The model can interpret a wish, but it cannot silently decide what I
-care about. I confirm the priorities and constraints first.”
+**Show:** The 7-of-9 result, departure cues, reasons for protected times, real
+directions from each prior stop, local cues, and the places calmly saved for
+another day.
 
-**Action:** Choose **See my tangled thread**.
+**Say:** “This is not another generated checklist. AURORA checked opening
+windows, visit durations, walking comfort, a fixed lunch booking, Victoria Peak
+near sunset, and shopping last. Seven places honestly fit. Two remain visible
+for another day.”
 
-### 1:05–1:30 — Untangle with deterministic proof
+**Optional proof:** Open **How DayWeave decided**.
 
-**Action:** Press **Untangle my day** and let the thread settle.
+**Say:** “OpenAI interprets messy intent when connected. Validated application
+logic verifies what is possible. The traveller approves every meaningful
+change.”
 
-**Say:** “AURORA’s deterministic optimizer now checks every candidate against
-opening windows, visit durations, the demo’s seeded travel matrix, the
-reservation, walking comfort, sunset, and shopping last. It protects feasible
-must-visits and says honestly what belongs another day.”
+**Say:** “Knowing where to go is not enough. The route also tells me the detail
+worth noticing at every supported stop, like the shrimp wontons and duck-egg
+noodles at Mak’s.”
 
-**Action:** Point out the fit count, time/walking improvement, protected moments,
-and gently deferred places.
+### 1:15 to 1:40 | A changed day, without a hidden compromise
 
-**Say:** “GPT did not calculate this route. Tested application logic did, and
-every change has a reason code.”
+**Choose:** **Try the live journey**, **Start this leg**, **I’ve arrived**, and
+**Done with this stop**. Then choose **I’m running 40 minutes late**.
 
-### 1:30–1:50 — One calm next decision
+**Say:** “Forty minutes later, DayWeave recalculates only what remains. It shows
+two valid paths: protect the emotional anchors and defer a lower-priority stop,
+or keep every stop with tighter buffers. Nothing disappears until I choose.”
 
-**Action:** Choose **Begin my day**. On the single next-place card, choose **Take
-me there**, **I’ve arrived**, then **Tie this moment**.
+**Choose:** **Protect the moments**.
 
-**Say:** “Live mode is intentionally not a dense schedule. It answers one calm
-question: where should I go next, and why does that protect something I care
-about?”
+### 1:40 to 1:55 | Staying longer is success
 
-### 1:50–2:20 — Repair the remaining day
+**Show:** Approve **Protect the moments**, go to the next stop, then choose
+**Stay a little longer** and **+30 minutes**.
 
-**Action:** Choose **I’m running 40 minutes late**.
+**Say:** “This is the emotional feature I care about most. Enjoying a place
+longer is not failure. DayWeave reshapes the unvisited day while completed
+moments, bookings, and protected timing stay visible.”
 
-**Say:** “Travel days change. DayWeave freezes what already happened and
-recalculates only the remainder. It never quietly removes a place.”
+### 1:55 to 2:00 | Close
 
-**Action:** Compare the two recovery choices, then select **Protect the moments**.
+**Say:** “AI understands what matters. Deterministic planning verifies what is
+possible. The traveller remains in control. DayWeave protects the point of the
+trip, not the size of the checklist.”
 
-**Say:** “I can protect the reservation and sunset while saving a lower-priority
-stop—PMQ—for tomorrow and keep a balanced pace, finishing by 8:35. Or I can
-keep every chosen stop with explicitly packed pacing and tighter transition
-buffers, finishing by 8:27. No taxi or fare is invented. When a path is
-infeasible, DayWeave disables it instead of bluffing. The traveller chooses the
-trade-off.”
+## Destination recommendation path, if asked
 
-### 2:20–2:40 — Useful evidence, not viral certainty
+1. Enter **Singapore**. Saved places are optional.
+2. Choose **Show me what not to miss**.
+3. Show the service headline and the three-stop recommended thread.
+4. Point out **Why it earns the stop**, **Don't miss here**, and the dated
+   source on every row.
+5. Explain that saved places and DayWeave picks are labelled separately.
+6. Choose **Use this recommendation in Maps** only if opening a new tab is
+   useful for the demo.
 
-**Action:** Choose **View Don’t Miss Here**, then briefly expand **View evidence**.
-
-**Say:** “DayWeave surfaces one detail people often discover too late, with a
-source, freshness, recurrence, and confidence. Here, the next stop is Mak’s
-Noodle, so the briefing explains the signature wonton-noodle bowl and its
-heritage. Weak or conflicting evidence is labelled mixed or unknown and is
-never allowed to move the route.”
-
-### 2:40–2:55 — Staying longer is a feature
-
-**Action:** Close the evidence disclosure, choose **Take me there**, then choose
-**I’m loving it here** and **+30 minutes**.
-
-**Say:** “This is the emotional feature I care about most: ‘Stay. This is what
-the trip is for.’ Enjoying a place longer is not failure. AURORA reshapes the
-remaining afternoon while keeping protected moments visible.”
-
-### 2:55–3:00 — Close
-
-**Action:** Keep the re-woven route on screen. If the clicks are rehearsed,
-choose **Reweave the rest** and **Finish the demo day** to show the memory thread.
-
-**Say:** “AI understands what matters. Deterministic optimization verifies what
-is possible. The traveller remains in control. That is DayWeave.”
-
-## If something goes wrong
-
-- **No AI key / network:** Stay on the seeded Hong Kong path and explicitly say
-  it is the offline adapter. This is a supported product state.
-- **Animation is disabled:** Continue immediately; reduced-motion mode preserves
-  every state and action.
-- **A panel is already open:** Reload to return to the opening state.
-- **A judge asks why something moved:** Open the visible change explanation and
-  point to the structured reason, not a model-generated assertion.
-- **A judge asks about discovery:** Explain that a suggestion can be added,
-  saved, or rejected, and never enters the route without explicit approval.
+Hong Kong, Singapore, Seoul, Cheung Chau, and Johor Bahru work from curated
+destination knowledge with no model key. Other destinations use attributed
+Wikivoyage listings when the guide exposes enough specific recommendations.
+The worldwide picker helps locate a destination, but a broad country may still
+need a city, island, or smaller region. The explicit Hong Kong example keeps
+the full adaptive-route demonstration. The screenshot control appears only
+when vision is connected.
 
 ## Claims to avoid
 
-- Do not say the demo uses live traffic, live venue availability, or live social
-  scraping.
+- Do not say the demo uses live traffic, live venue availability, or live
+  social scraping.
 - Do not say GPT optimizes, proves feasibility, or supplies travel times.
-- Do not describe one source as local consensus.
-- Do not imply deferred places are failures or that completing everything is
-  the goal.
+- Do not imply that one source represents local consensus.
+- Do not call deferred places failures.
+- Do not label a planned stop as a memory. Only explicitly completed stops
+  appear on the memory thread.

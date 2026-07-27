@@ -39,7 +39,7 @@ describe("local Hong Kong extraction", () => {
       expect.objectContaining({
         placeName: "Mak’s Noodle",
         startTime: "12:30",
-        endTime: null,
+        endTime: "13:30",
         confirmationCode: "DW-DEMO-1230",
       }),
     );

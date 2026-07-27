@@ -18,31 +18,34 @@ export const metadata: Metadata = {
   ),
   title: "DayWeave — Make time for what matters",
   description:
-    "A calm live wishlist maximizer for one meaningful day in Hong Kong. DayWeave protects must-visits, adapts with permission and reveals what not to miss.",
+    "DayWeave recommends the day worth taking and reveals what not to miss at every stop, with adaptive routing where verified destination data is available.",
   applicationName: "DayWeave",
   category: "travel",
   keywords: [
-    "Hong Kong day planner",
+    "destination day planner",
     "travel wishlist optimizer",
     "adaptive itinerary",
+    "what not to miss travel guide",
     "DayWeave",
     "AURORA",
   ],
   authors: [{ name: "DayWeave" }],
-  icons: { icon: "/favicon.svg" },
+  icons: {
+    icon: [{ url: "/dayweave-mark.svg", type: "image/svg+xml" }],
+  },
   openGraph: {
     title: "DayWeave — Make time for what matters",
     description:
-      "Bring the places you already love. DayWeave protects what matters and calmly reshapes the day when plans change.",
+      "Protect the moments you saved for, know what makes each stop worth it, and adapt the day without rushing it.",
     type: "website",
     locale: "en_HK",
     siteName: "DayWeave",
     images: [
       {
-        url: "/og.png",
-        width: 1731,
-        height: 909,
-        alt: "DayWeave postcard with a coral route thread, Hong Kong skyline and Wivi",
+        url: "/og-v2.png",
+        width: 1536,
+        height: 1024,
+        alt: "DayWeave postcard weaving a city, park and coast into one calm route with Wivi",
       },
     ],
   },
@@ -50,8 +53,8 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "DayWeave — Make time for what matters",
     description:
-      "A calm live wishlist maximizer for one meaningful day in Hong Kong.",
-    images: ["/og.png"],
+      "A calm, actionable day that protects what you went for and reveals what not to miss.",
+    images: ["/og-v2.png"],
   },
 };
 

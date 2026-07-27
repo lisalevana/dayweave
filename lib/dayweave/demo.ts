@@ -203,7 +203,7 @@ export const tangledDemoOrder: string[] = [
 
 export const messyHongKongWishlist = `Hong Kong Saturday!!
 NON-NEGOTIABLE: Man Mo Temple, Tai Kwun + Victoria Peak around sunset 🌇
-Mak's lunch booking 12:30 (ref DW-DEMO-1230)
+Mak's lunch booking 12:30–1:30 (ref DW-DEMO-1230)
 PMQ would be lovely
 maybe Bakehouse Soho / the long escalator / Star Ferry if there’s time?
 Temple Street for shopping — LAST please, don't want to carry bags all day

@@ -171,7 +171,20 @@ function clockTimesFromContext(context: string) {
     times.push(`${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`);
   }
 
-  return [...new Set(times)];
+  const uniqueTimes = [...new Set(times)];
+  if (uniqueTimes.length >= 2) {
+    const [startHour, startMinute] = uniqueTimes[0].split(":").map(Number);
+    const [endHour, endMinute] = uniqueTimes[1].split(":").map(Number);
+    const start = startHour * 60 + startMinute;
+    const end = endHour * 60 + endMinute;
+
+    // People commonly write lunch ranges as “12:30–1:30” without repeating PM.
+    if (end <= start && startHour >= 12 && endHour < 12) {
+      uniqueTimes[1] = `${String(endHour + 12).padStart(2, "0")}:${String(endMinute).padStart(2, "0")}`;
+    }
+  }
+
+  return uniqueTimes;
 }
 
 function confirmationCodeFromContext(context: string) {
